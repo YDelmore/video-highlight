@@ -35,6 +35,14 @@ def test_cli_missing_file(tmp_path: Path):
     assert "file not found" in result.stdout
 
 
+def test_cli_no_args_defaults_to_docs_danmaku(project_root: Path):
+    """With no arguments, running from the project root uses docs/danmaku.xml."""
+    assert (project_root / "docs" / "danmaku.xml").exists()
+    result = _run_cli()
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    assert "=== 指标1: 弹幕密度" in result.stdout
+
+
 def test_cli_with_plot(project_root: Path, tmp_path: Path):
     """Passing --plot generates a PNG file (or degrades gracefully)."""
     xml = project_root / "docs" / "danmaku.xml"

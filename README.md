@@ -24,6 +24,9 @@ uv run video-highlight path/to/danmaku.xml
 uv run video-highlight path/to/danmaku.xml --plot chart.png
 ```
 
+`xml_path` is optional: when omitted, `docs/danmaku.xml` in the current
+directory is used if present (handy for IDE "Run" buttons).
+
 Output is a fixed-section console report:
 
 ```

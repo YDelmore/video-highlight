@@ -19,7 +19,14 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         prog="video-highlight",
         description="Analyze livestream danmaku and surface highlight candidates.",
     )
-    parser.add_argument("xml_path", type=Path, help="Path to danmaku XML file.")
+    parser.add_argument(
+        "xml_path",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Path to danmaku XML file. When omitted, docs/danmaku.xml in the "
+        "current directory is used if present.",
+    )
     parser.add_argument(
         "--plot",
         type=Path,
@@ -37,6 +44,20 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as exc:
         # argparse exits via SystemExit; convert to a stubbed return code.
         return int(exc.code or 1)
+
+    if args.xml_path is None:
+        # Convenience default for IDE "Run" / interactive use: pick the
+        # repo's sample file when present, otherwise fail with usage.
+        default_xml = Path("docs/danmaku.xml")
+        if default_xml.is_file():
+            args.xml_path = default_xml
+        else:
+            print(
+                "video-highlight: no xml_path given and no docs/danmaku.xml "
+                "found in the current directory"
+            )
+            print("usage: video-highlight <path-to-xml> [--plot OUT]")
+            return 1
 
     if not args.xml_path.exists():
         print(f"video-highlight: file not found: {args.xml_path}")
