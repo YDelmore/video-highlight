@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<i>
+  <metadata>
+    <platform>TestPlatform</platform>
+    <live_start_time>1000000</live_start_time>
+    <user_name>test_room</user_name>
+    <room_id>1</room_id>
+  </metadata>
+  <d p="0.0,1,25,16777215,1000000,0,uid_a,uid_a,0" user="user_a" uid="uid_a" timestamp="1000000">first</d>
+  <d p="1.0,1,25,16777215,1001000,0,uid_b,uid_b,0" user="user_b" uid="uid_b" timestamp="1001000">second</d>
+  <d p="1.0,1,25,16777215,1001000,0,uid_c,uid_c,0" user="user_c" uid="uid_c" timestamp="1001000">third</d>
+  <d p="1.0,1,25,16777215,1001000,0,uid_a,uid_a,0" user="user_a" uid="uid_a" timestamp="1001000">fourth</d>
+  <d p="20.0,1,25,16777215,1020000,0,uid_b,uid_b,0" user="user_b" uid="uid_b" timestamp="1020000">fifth</d>
+</i>
