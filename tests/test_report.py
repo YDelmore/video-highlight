@@ -5,8 +5,8 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
-import pytest
 
 from video_highlight.highlights import HighlightCandidate
 from video_highlight.metrics.activation import ActivationResult
@@ -117,6 +117,53 @@ def test_console_print_includes_highlight_table_and_candidate_means():
     assert "candidate" in out
     # candidate window [2,3]: activation mean of (0.2, 0.5) = 0.35 -> 35.0%
     assert "35.0%" in out
+    # candidate window [2,3]: short mean of (0.5, 0.6) = 0.55, long mean of
+    # (0.2, 0.1) = 0.15 -> 55.0%/15.0%
+    assert "#1: 55.0%/15.0%" in out
+
+
+def test_console_print_warns_when_activation_all_nan():
+    act = ActivationResult(
+        activation=pd.Series(
+            [np.nan, np.nan, np.nan], index=[0.0, 1.0, 2.0], dtype=float
+        ),
+        silent_uids=frozenset(),
+        active_uids=frozenset(),
+        observation_seconds=60.0,
+        n_silent=0,
+        n_active=0,
+    )
+    buf = io.StringIO()
+    console_print(
+        density=_density(),
+        burst=_burst(),
+        highlights=[],
+        activation=act,
+        length_dist=_length_dist(),
+        danmaku_count=4,
+        duration_seconds=4.0,
+        stream=buf,
+    )
+    assert "[WARN] 观测期覆盖全部数据" in buf.getvalue()
+
+
+def test_console_print_candidate_mean_dash_when_no_data():
+    cand = HighlightCandidate(
+        t_start=100.0, t_end=101.0, peak_t=100.5, peak_density=3.0, level="candidate"
+    )
+    buf = io.StringIO()
+    console_print(
+        density=_density(),
+        burst=_burst(),
+        highlights=[cand],
+        activation=_activation(),
+        length_dist=_length_dist(),
+        danmaku_count=4,
+        duration_seconds=4.0,
+        stream=buf,
+    )
+    # candidate window [100,101] is outside activation's range -> "--"
+    assert "#1: --" in buf.getvalue()
 
 
 def test_plot_returns_true_or_false(tmp_path: Path):

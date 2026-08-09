@@ -111,13 +111,14 @@ def console_print(
     )
     sr_valid = sr.dropna()
     if len(sr_valid):
+        mask = sr_valid.index
         out.write(
-            f"短/中/长占比均值: {sr_valid.mean():.3f} / "
-            f"{mr.dropna().mean():.3f} / {lr.dropna().mean():.3f}\n"
+            f"短/中/长占比均值: {sr[mask].mean():.3f} / "
+            f"{mr[mask].mean():.3f} / {lr[mask].mean():.3f}\n"
         )
         out.write(
             f"短弹幕激增(>70%)窗口数: {int((sr_valid > 0.70).sum())}  / "
-            f"长弹幕激增(>30%)窗口数: {int((lr.dropna() > 0.30).sum())}\n"
+            f"长弹幕激增(>30%)窗口数: {int((lr[mask] > 0.30).sum())}\n"
         )
         if highlights:
             parts = []
