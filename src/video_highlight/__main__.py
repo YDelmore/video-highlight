@@ -19,6 +19,8 @@ from video_highlight.metrics.returning import compute as compute_returning
 from video_highlight.parser import parse_xml
 from video_highlight.report import console_print, plot
 
+_DEFAULT_XML = Path("docs/2026-08-07-22-24-43-052-解说一下今天比赛.xml")
+
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -30,9 +32,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         type=Path,
         nargs="?",
         default=None,
-        help="Path to danmaku XML file. When omitted, "
-        "docs/2026-08-07-22-24-43-052-解说一下今天比赛.xml in the current "
-        "directory is used if present.",
+        help=f"Path to danmaku XML file. When omitted, {_DEFAULT_XML} in the "
+        "current directory is used if present.",
     )
     parser.add_argument(
         "--plot",
@@ -49,19 +50,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = _parse_args(argv if argv is not None else sys.argv[1:])
     except SystemExit as exc:
-        # argparse exits via SystemExit; convert to a stubbed return code.
-        return int(exc.code or 1)
+        # argparse exits via SystemExit; convert to a return code (help -> 0).
+        return int(exc.code if exc.code is not None else 1)
 
     if args.xml_path is None:
         # Convenience default for IDE "Run" / interactive use: pick the
         # repo's sample file when present, otherwise fail with usage.
-        default_xml = Path("docs/2026-08-07-22-24-43-052-解说一下今天比赛.xml")
-        if default_xml.is_file():
-            args.xml_path = default_xml
+        if _DEFAULT_XML.is_file():
+            args.xml_path = _DEFAULT_XML
         else:
             print(
-                "video-highlight: no xml_path given and no "
-                "docs/2026-08-07-22-24-43-052-解说一下今天比赛.xml "
+                f"video-highlight: no xml_path given and no {_DEFAULT_XML} "
                 "found in the current directory"
             )
             print("usage: video-highlight <path-to-xml> [--plot OUT]")
