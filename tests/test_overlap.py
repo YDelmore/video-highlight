@@ -52,3 +52,29 @@ def test_empty_df():
     empty = pd.DataFrame(columns=["t", "uid", "text", "length"])
     res = compute(empty)
     assert res.overlap.empty
+
+
+def test_reverse_one_empty_is_zero():
+    # current window empty, previous window non-empty -> 0
+    rows = [
+        {"t": 1.0, "uid": "A", "text": "x", "length": 1},
+        {"t": 100.0, "uid": "B", "text": "x", "length": 1},
+    ]
+    res = compute(_df(rows), window_seconds=30)
+    # t=61: U(61)=[31,61) empty; U(31)=[1,31)={A} -> 0
+    assert res.overlap.loc[61.0] == 0.0
+
+
+def test_two_w_bounds():
+    rows = [
+        {"t": 0.0, "uid": "A", "text": "x", "length": 1},
+        {"t": 1.0, "uid": "B", "text": "x", "length": 1},
+        {"t": 32.0, "uid": "B", "text": "x", "length": 1},
+        {"t": 33.0, "uid": "C", "text": "x", "length": 1},
+        {"t": 70.0, "uid": "D", "text": "x", "length": 1},
+    ]
+    res = compute(_df(rows), window_seconds=30)
+    # t < 2*W are NaN; t=60 first valid: U(60)={B,C}, U(30)={A,B} -> 1/3
+    assert pd.isna(res.overlap.loc[29.0])
+    assert pd.isna(res.overlap.loc[59.0])
+    assert res.overlap.loc[60.0] == pytest.approx(1 / 3)
