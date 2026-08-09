@@ -33,7 +33,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--plot",
         type=Path,
         default=None,
-        help="If provided, save a 2x2 summary chart to this PNG path. "
+        help="If provided, save a 2x3 summary chart to this PNG path. "
         "Requires matplotlib (pip install 'video-highlight[plot]').",
     )
     return parser.parse_args(argv)
