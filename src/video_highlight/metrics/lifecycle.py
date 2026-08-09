@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from video_highlight.highlights import HighlightCandidate
 from video_highlight.metrics._offsets import scaled_offset
 
 
@@ -38,7 +39,7 @@ class LifecycleResult:
     windows: list[LifecycleWindow]
 
 
-def compute(df: pd.DataFrame, highlights: list) -> LifecycleResult:
+def compute(df: pd.DataFrame, highlights: list[HighlightCandidate]) -> LifecycleResult:
     if df.empty:
         return LifecycleResult([])
 

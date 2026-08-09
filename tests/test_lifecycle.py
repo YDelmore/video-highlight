@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from video_highlight.highlights import HighlightCandidate
 from video_highlight.metrics.lifecycle import LifecycleResult, compute
@@ -67,3 +66,24 @@ def test_no_highlights():
     df = _df([{"t": 0.0, "uid": "a", "text": "x", "length": 1}])
     res = compute(df, [])
     assert res.windows == []
+
+
+def test_empty_df():
+    empty = pd.DataFrame(columns=["t", "uid", "text", "length"])
+    res = compute(empty, [_hl(0, 10)])
+    assert res.windows == []
+
+
+def test_stream_tail_window_degradation():
+    # window near stream end: persistent/converted collapse to 0
+    rows = [
+        {"t": 100.0, "uid": "U2", "text": "x", "length": 1},
+        {"t": 1705.0, "uid": "U2", "text": "x", "length": 1},
+        {"t": 1705.0, "uid": "U1", "text": "x", "length": 1},
+    ]
+    res = compute(_df(rows), [_hl(1700, 1710)])
+    w = res.windows[0]
+    assert w.instant == 1        # U1 (only speaks in window)
+    assert w.persistent == 0     # stream ends before te + A
+    assert w.converted == 0      # stream ends before te + C
+    assert w.total_users == 2
