@@ -46,16 +46,28 @@ def test_returning_hand_computed():
 
 
 def test_gap_before_stream_start_yields_zero():
+    # gap_start < 0: no one can have spoken before the gap -> returning 0
     rows = [
         {"t": 50.0, "uid": "U1", "text": "x", "length": 1},
-        {"t": 200.0, "uid": "U1", "text": "x", "length": 1},
-        {"t": 200.0, "uid": "U2", "text": "x", "length": 1},
+        {"t": 10.0, "uid": "U2", "text": "x", "length": 1},  # speaks in window
     ]
     res = compute(_df(rows), [_hl(0, 20)])
     w = res.windows[0]
     assert w.gap_start < 0
     assert w.returning_count == 0
     assert w.ratio == 0.0
+    assert w.total_users == 1
+
+
+def test_empty_window_ratio_is_nan():
+    rows = [
+        {"t": 100.0, "uid": "A", "text": "x", "length": 1},
+        {"t": 200.0, "uid": "B", "text": "x", "length": 1},
+    ]
+    res = compute(_df(rows), [_hl(0, 20)])
+    w = res.windows[0]
+    assert w.total_users == 0
+    assert pd.isna(w.ratio)
 
 
 def test_no_highlights():

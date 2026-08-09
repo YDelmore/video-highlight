@@ -72,7 +72,7 @@ def compute(df: pd.DataFrame, highlights: list[HighlightCandidate]) -> Returning
             returning += 1
 
         total = len(window_uids)
-        ratio = returning / total if total else 0.0
+        ratio = returning / total if total else float("nan")
         out.append(
             ReturningWindow(
                 t_start=ts,
