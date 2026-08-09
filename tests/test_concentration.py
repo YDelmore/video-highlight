@@ -54,3 +54,37 @@ def test_empty_df():
     empty = pd.DataFrame(columns=["t", "uid", "text", "length"])
     res = compute(empty)
     assert res.concentration.empty
+
+
+def test_cross_second_window_merging():
+    # bullets spread across seconds 5 and 6 merge inside one window [0,10)
+    rows = (
+        [{"t": 5.0, "uid": "A", "text": "x", "length": 1}] * 2
+        + [{"t": 5.0, "uid": "B", "text": "x", "length": 1}]
+        + [{"t": 6.0, "uid": "C", "text": "x", "length": 1}]
+        + [{"t": 6.0, "uid": "D", "text": "x", "length": 1}]
+        + [{"t": 6.0, "uid": "E", "text": "x", "length": 1}]
+        + [{"t": 15.0, "uid": "F", "text": "x", "length": 1}]
+    )
+    res = compute(_df(rows), window_seconds=10)
+    # t=10 window [0,10) merges sec5{A×2,B} and sec6{C,D,E}: top3 = 4 / 6
+    assert res.concentration.loc[10.0] == pytest.approx(4 / 6)
+
+
+def test_top3_tie_is_sum_invariant():
+    # A:5, B:2, C:2, D:2 -> any two of B/C/D in top-3; sum is invariant 5+2+2=9
+    rows = (
+        [{"t": 15.0, "uid": "A", "text": "x", "length": 1}] * 5
+        + [{"t": 15.0, "uid": "B", "text": "x", "length": 1}] * 2
+        + [{"t": 15.0, "uid": "C", "text": "x", "length": 1}] * 2
+        + [{"t": 15.0, "uid": "D", "text": "x", "length": 1}] * 2
+    )
+    res = compute(_df(rows), window_seconds=10)
+    assert res.concentration.loc[16.0] == pytest.approx(9 / 11)
+
+
+def test_insufficient_history_is_nan():
+    rows = [{"t": 15.0, "uid": "A", "text": "x", "length": 1}]
+    res = compute(_df(rows), window_seconds=10)
+    for t in (0.0, 5.0, 9.0):
+        assert pd.isna(res.concentration.loc[t])
