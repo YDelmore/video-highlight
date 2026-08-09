@@ -200,7 +200,7 @@ def console_print(
                 f"候选 [{w.t_start:.1f},{w.t_end:.1f}]: "
                 f"回锅 {w.returning_count} / 总数 {w.total_users} → {ratio_str}"
             )
-            if w.gap_start < 0:
+            if w.gap_start <= 0:
                 line += "  [静默间隙超出流起点]"
             out.write(line + "\n")
     else:

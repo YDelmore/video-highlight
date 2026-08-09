@@ -37,13 +37,18 @@ loader.to_dataframe → DataFrame (t, uid, text, length)
 ## 2. 共享自适应时间偏移（`metrics/_offsets.py`）
 
 ```python
-def adaptive_scale(duration_seconds: float, reference_seconds: float = 1800.0) -> float:
-    """s = min(1, duration/reference). Offsets are multiplied by s."""
-    return min(1.0, duration_seconds / reference_seconds)
+def scaled_offset(offset_seconds: float, duration_seconds: float, ratio: float = 0.25) -> float:
+    """Cap an absolute time offset at a fraction of the stream duration.
+
+    min(offset, duration * ratio). Same philosophy as metric 3's observation
+    period (min(300, duration*0.25)): long streams keep the strategy's absolute
+    offsets; short streams shrink them so the metrics stay observable.
+    """
+    return min(offset_seconds, duration_seconds * ratio)
 ```
 
-- 参考 1800s = 30 分钟。`duration >= 1800s` → s=1（策略原值）；更短按比例收缩。
-- 与指标 3 观测期（`min(300, duration*0.25)`）同样解决"短流偏移超界"问题，此处统一为比例缩放。
+- 逐偏移封顶，而非统一比例。长流（如 >80 分钟的 20 分钟静默偏移）保持策略原值；短流按 `duration*0.25` 收缩。
+- 选择依据：统一比例 `s=min(1, D/1800)` 在 30 分钟主数据集上 s≈1，导致指标 8 的 20 分钟静默间隙（1200s）超出高潮窗口位置（t≈687s），回锅必然为 0。按偏移封顶后静默间隙缩到 449s，回锅真实可观察。
 
 ---
 
@@ -111,10 +116,10 @@ def compute(df, *, window_seconds=30) -> OverlapResult
 ### 算法（每候选窗口）
 
 ```
-设候选窗口 [t_start, t_end]，缩放 s = adaptive_scale(duration)：
-  A = 300s·s   (持续用户前后缓冲 5min)
-  B = 120s·s   (转化用户前窗 2min)
-  C = 600s·s   (转化用户后窗 10min)
+设候选窗口 [t_start, t_end]，duration = t.max() - t.min()：
+  A = scaled_offset(300, duration)   (持续用户前后缓冲 5min)
+  B = scaled_offset(120, duration)   (转化用户前窗 2min)
+  C = scaled_offset(600, duration)   (转化用户后窗 10min)
 
 对每个 uid 的全局首次/末次发言 (first, last)：
   瞬时用户 = first ∈ [t_start, t_end] ∧ last ∈ [t_start, t_end]
@@ -136,8 +141,10 @@ class LifecycleWindow:
     instant: int
     persistent: int
     converted: int
-    total_users: int   # 窗口内去重用户数
-    scale: float
+    total_users: int    # 窗口内去重用户数
+    offset_a: float     # 缩放后的 A (持续缓冲)
+    offset_b: float     # 缩放后的 B (转化前窗)
+    offset_c: float     # 缩放后的 C (转化后窗)
 
 @dataclass(frozen=True)
 class LifecycleResult:
@@ -153,14 +160,17 @@ def compute(df, highlights, *, ...) -> LifecycleResult
 ### 算法（每候选窗口）
 
 ```
-设候选窗口 [t_start, t_end]，以 t_start 为参考时刻，s = adaptive_scale(duration)：
-  早期期   = [0, 1800s·s)          # "证明来过"
-  静默窗   = [t_start - 1200s·s, t_start - 120s·s)   # "证明离开过"
-  回锅用户 = 早期期有发言 ∧ 静默窗零发言 ∧ 窗口内又发言
+设候选窗口 [t_start, t_end]，duration = t.max() - t.min()：
+  gap_start = t_start - scaled_offset(1200, duration)   # 静默间隙起点
+  gap_end   = t_start - scaled_offset(120, duration)    # 静默间隙终点
+  回锅用户 = 在 [0, gap_start) 有发言          # "静默前活跃过"
+          ∧ 在 [gap_start, gap_end) 零发言     # "证明离开过"
+          ∧ 窗口内又发言                        # "证明被召回"
   比例     = 回锅用户数 / 窗口内去重用户数
 ```
 
-- 边界：静默窗下界 < 0 时截断为 0；早期期与静默窗重叠（超短流）时"来过且离开"不可同时满足 → 比例 0，报告标注"流过短无法观察回锅"。
+- 采用"静默窗之前活跃"而非策略字面"前 30 分钟"，避免早期期与静默窗重叠的退化（30 分钟流上"前 30 分钟"覆盖全场）。语义忠实于"前期来过→离开→回来"。
+- 边界：`gap_start < 0` 时 `[0, gap_start)` 为空 → 回锅为 0，报告标注"静默间隙超出流起点，无法观察回锅"。
 - 输出每窗口回锅数、总用户数、比例。
 
 ### 输出
@@ -172,7 +182,9 @@ class ReturningWindow:
     t_end: float
     returning_count: int
     total_users: int
-    ratio: float      # NaN 若 total_users == 0
+    ratio: float        # NaN 若 total_users == 0
+    gap_start: float    # 静默间隙起点（可能为负）
+    gap_end: float      # 静默间隙终点
 
 @dataclass(frozen=True)
 class ReturningResult:
@@ -203,10 +215,11 @@ def compute(df, highlights, *, ...) -> ReturningResult
 位于候选区间之后：
 
 ```
-=== 指标7: 用户生命周期 (缩放 s=1.000) ===
+=== 指标7: 用户生命周期 (偏移 A=300s B=120s C=449s) ===
 候选#1 [687,734]: 瞬时 X (xx%) / 持续 Y (yy%) / 转化 Z (zz%) / 窗口用户 N
-=== 指标8: 回锅用户比例 (缩放 s=1.000) ===
+=== 指标8: 回锅用户比例 (静默间隙 449s) ===
 候选#1 [687,734]: 回锅 R / 总数 N → rr.r%
+[若 gap_start<0: 标注"静默间隙超出流起点"]
 ```
 
 ### 7.2 图（`report.plot` 2×3 → 3×3）
@@ -257,7 +270,7 @@ def compute(df, highlights, *, ...) -> ReturningResult
 ```
 src/video_highlight/
 ├── metrics/
-│   ├── _offsets.py          # 新增：adaptive_scale
+│   ├── _offsets.py          # 新增：scaled_offset
 │   ├── concentration.py     # 新增：指标5
 │   ├── overlap.py           # 新增：指标6
 │   ├── lifecycle.py         # 新增：指标7
@@ -284,6 +297,6 @@ tests/
 - [ ] `--plot` 生成 3×3 九子图 PNG
 - [ ] 指标5 集中度序列有效点 ∈ [0,1]，空窗 NaN
 - [ ] 指标6 重合度序列有效点 ∈ [0,1]，边界 NaN 正确
-- [ ] 指标7/8 每窗口计数、占比、缩放 s 与手算一致
+- [ ] 指标7/8 每窗口计数、占比、缩放偏移与手算一致
 - [ ] 不修改 parser/loader/_window/density/burst/highlights/activation/length_dist
 - [ ] 无占位、无自创阈值（阈值全部来自策略文档）
