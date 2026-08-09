@@ -74,3 +74,26 @@ def test_no_highlights():
     df = _df([{"t": 0.0, "uid": "a", "text": "x", "length": 1}])
     res = compute(df, [])
     assert res.windows == []
+
+
+def test_empty_df():
+    empty = pd.DataFrame(columns=["t", "uid", "text", "length"])
+    res = compute(empty, [_hl(0, 20)])
+    assert res.windows == []
+
+
+def test_gap_start_boundary_is_inclusive():
+    # speaking exactly at gap_start fails the "before the gap" check
+    rows = [
+        {"t": 100.0, "uid": "U0", "text": "x", "length": 1},  # anchor, not in window
+        {"t": 1145.0, "uid": "U1", "text": "x", "length": 1},  # == gap_start
+        {"t": 1520.0, "uid": "U1", "text": "x", "length": 1},
+        {"t": 1144.0, "uid": "U2", "text": "x", "length": 1},  # < gap_start -> returning
+        {"t": 1520.0, "uid": "U2", "text": "x", "length": 1},
+    ]
+    res = compute(_df(rows), [_hl(1500, 1600)])
+    w = res.windows[0]
+    # duration 1420 -> gap_start = 1500 - 355 = 1145
+    assert w.gap_start == pytest.approx(1145.0)
+    assert w.returning_count == 1   # U2 only; U1 at exactly gap_start is not before-gap
+    assert w.total_users == 2
