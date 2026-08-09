@@ -10,8 +10,20 @@ from typing import TextIO
 import pandas as pd
 
 from video_highlight.highlights import HighlightCandidate
+from video_highlight.metrics.activation import ActivationResult
 from video_highlight.metrics.burst import BurstResult
 from video_highlight.metrics.density import DensityResult
+from video_highlight.metrics.length_dist import LengthDistResult
+
+
+def _mean_in_window(series: pd.Series, t_start: float, t_end: float) -> float | None:
+    """Mean of non-NaN series values within [t_start, t_end]; None if none."""
+    sel = series[(series.index >= t_start) & (series.index <= t_end)].dropna()
+    return float(sel.mean()) if len(sel) else None
+
+
+def _format_pct(value: float | None) -> str:
+    return "--" if value is None else f"{value * 100:.1f}%"
 
 
 def console_print(
@@ -19,6 +31,8 @@ def console_print(
     density: DensityResult,
     burst: BurstResult,
     highlights: list[HighlightCandidate],
+    activation: ActivationResult,
+    length_dist: LengthDistResult,
     danmaku_count: int,
     duration_seconds: float,
     stream: TextIO = sys.stdout,
@@ -60,9 +74,60 @@ def console_print(
         valid_Srel = burst.S_rel.dropna()
         if len(valid_Srel):
             peak_rel_idx = valid_Srel.idxmax()
-            out.write(f"最大 S_rel: {valid_Srel.max():.3f} at t={peak_rel_idx:.1f}\n")
+            out.write(
+                f"最大 S_rel: {valid_Srel.max():.3f} at t={peak_rel_idx:.1f}\n"
+            )
     else:
         out.write("（无有效 S 数据）\n")
+
+    out.write("\n=== 指标3: 沉默用户激活率 ===\n")
+    out.write(f"观测期: {activation.observation_seconds:.1f} 秒\n")
+    out.write(
+        f"沉默池: {activation.n_silent} 人 / 活跃: {activation.n_active} 人 (K=2)\n"
+    )
+    act = activation.activation
+    act_valid = act.dropna()
+    if len(act_valid):
+        peak_idx = act_valid.idxmax()
+        out.write(f"有效区间: t >= {activation.observation_seconds:.1f}\n")
+        out.write(
+            f"激活率 均值: {act_valid.mean():.3f} / "
+            f"峰值: {act_valid.max():.3f} at t={peak_idx:.1f}\n"
+        )
+        if highlights:
+            means = [
+                f"#{i + 1}: {_format_pct(_mean_in_window(act, h.t_start, h.t_end))}"
+                for i, h in enumerate(highlights)
+            ]
+            out.write("候选窗口内平均激活率:  " + "  ".join(means) + "\n")
+    else:
+        out.write("[WARN] 观测期覆盖全部数据，无有效激活率区间\n")
+
+    out.write("\n=== 指标4: 弹幕长度分布 (W=10s) ===\n")
+    sr, mr, lr = (
+        length_dist.short_ratio,
+        length_dist.mid_ratio,
+        length_dist.long_ratio,
+    )
+    sr_valid = sr.dropna()
+    if len(sr_valid):
+        out.write(
+            f"短/中/长占比均值: {sr_valid.mean():.3f} / "
+            f"{mr.dropna().mean():.3f} / {lr.dropna().mean():.3f}\n"
+        )
+        out.write(
+            f"短弹幕激增(>70%)窗口数: {int((sr_valid > 0.70).sum())}  / "
+            f"长弹幕激增(>30%)窗口数: {int((lr.dropna() > 0.30).sum())}\n"
+        )
+        if highlights:
+            parts = []
+            for i, h in enumerate(highlights):
+                s = _mean_in_window(sr, h.t_start, h.t_end)
+                l = _mean_in_window(lr, h.t_start, h.t_end)
+                parts.append(f"#{i + 1}: {_format_pct(s)}/{_format_pct(l)}")
+            out.write("候选窗口内平均 短/长占比:  " + "  ".join(parts) + "\n")
+    else:
+        out.write("（无有效长度分布数据）\n")
 
     out.write("\n=== 高潮候选区间（合并后） ===\n")
     if highlights:
@@ -111,9 +176,11 @@ def plot(
     burst: BurstResult,
     highlights: list[HighlightCandidate],
     *,
+    activation: ActivationResult,
+    length_dist: LengthDistResult,
     output_path: str | Path,
 ) -> bool:
-    """Render a 2x2 chart to ``output_path``. Return False if matplotlib unavailable."""
+    """Render a 2x3 chart to ``output_path``. Return False if matplotlib unavailable."""
     try:
         import matplotlib
 
@@ -124,9 +191,9 @@ def plot(
 
     _configure_cjk_font()
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    fig, axes = plt.subplots(2, 3, figsize=(16, 8))
 
-    # Subplot 1: density curve + thresholds
+    # (0,0) density + thresholds
     ax = axes[0, 0]
     ax.plot(density.D.index, density.D.values, label="D(t)", color="tab:blue")
     if density.sigma > 0:
@@ -147,7 +214,7 @@ def plot(
     ax.set_ylabel("bullets / 10s")
     ax.legend(loc="best")
 
-    # Subplot 2: burst S(t)
+    # (0,1) burst S
     ax = axes[0, 1]
     ax.plot(burst.S.index, burst.S.values, label="S(t)", color="tab:purple")
     if burst.sigma_S > 0:
@@ -156,7 +223,18 @@ def plot(
     ax.set_xlabel("t (s)")
     ax.legend(loc="best")
 
-    # Subplot 3: S_rel
+    # (0,2) activation
+    ax = axes[0, 2]
+    act = activation.activation
+    ax.plot(act.index, act.values, label="activation(t)", color="tab:red")
+    for pct in (0.4, 0.6, 0.8):
+        ax.axhline(pct, color="tab:gray", linestyle=":", linewidth=0.8)
+    ax.set_title("沉默用户激活率")
+    ax.set_xlabel("t (s)")
+    ax.set_ylim(-0.05, 1.05)
+    ax.legend(loc="best")
+
+    # (1,0) S_rel
     ax = axes[1, 0]
     ax.plot(
         burst.S_rel.index,
@@ -168,8 +246,21 @@ def plot(
     ax.set_xlabel("t (s)")
     ax.legend(loc="best")
 
-    # Subplot 4: density stem view
+    # (1,1) length ratios
     ax = axes[1, 1]
+    sr = length_dist.short_ratio
+    lr = length_dist.long_ratio
+    ax.plot(sr.index, sr.values, label="short", color="tab:blue")
+    ax.plot(lr.index, lr.values, label="long", color="tab:orange")
+    ax.axhline(0.70, color="tab:gray", linestyle=":", linewidth=0.8)
+    ax.axhline(0.30, color="tab:gray", linestyle=":", linewidth=0.8)
+    ax.set_title("弹幕长度分布 (短/长)")
+    ax.set_xlabel("t (s)")
+    ax.set_ylim(-0.05, 1.05)
+    ax.legend(loc="best")
+
+    # (1,2) density stem view
+    ax = axes[1, 2]
     valid = density.D.dropna()
     ax.vlines(valid.index, 0, valid.values, color="tab:gray", alpha=0.6)
     ax.set_title("密度柱状视图")
