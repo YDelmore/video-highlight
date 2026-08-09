@@ -8,8 +8,10 @@ from pathlib import Path
 
 from video_highlight.highlights import find_candidates
 from video_highlight.loader import to_dataframe
+from video_highlight.metrics.activation import compute as compute_activation
 from video_highlight.metrics.burst import compute as compute_burst
 from video_highlight.metrics.density import compute as compute_density
+from video_highlight.metrics.length_dist import compute as compute_length_dist
 from video_highlight.parser import parse_xml
 from video_highlight.report import console_print, plot
 
@@ -68,11 +70,15 @@ def main(argv: list[str] | None = None) -> int:
     density = compute_density(df)
     burst = compute_burst(density)
     highlights = find_candidates(density)
+    activation = compute_activation(df)
+    length_dist = compute_length_dist(df)
 
     console_print(
         density=density,
         burst=burst,
         highlights=highlights,
+        activation=activation,
+        length_dist=length_dist,
         danmaku_count=len(records),
         duration_seconds=density.duration_seconds,
     )
@@ -82,6 +88,8 @@ def main(argv: list[str] | None = None) -> int:
             density=density,
             burst=burst,
             highlights=highlights,
+            activation=activation,
+            length_dist=length_dist,
             output_path=args.plot,
         )
         if ok:

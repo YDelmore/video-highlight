@@ -20,13 +20,15 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess:
 
 
 def test_cli_on_real_dataset(project_root: Path):
-    """Running on docs/danmaku.xml exits 0 and prints metric sections."""
+    """Running on docs/danmaku.xml exits 0 and prints all four metric sections."""
     xml = project_root / "docs" / "danmaku.xml"
     assert xml.exists(), f"fixture missing: {xml}"
     result = _run_cli(str(xml))
     assert result.returncode == 0, f"stderr: {result.stderr}"
     assert "=== 指标1: 弹幕密度" in result.stdout
     assert "=== 指标2: 爆发速率" in result.stdout
+    assert "=== 指标3: 沉默用户激活率" in result.stdout
+    assert "=== 指标4: 弹幕长度分布" in result.stdout
 
 
 def test_cli_missing_file(tmp_path: Path):
