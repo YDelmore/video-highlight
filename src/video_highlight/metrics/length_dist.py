@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import numpy as np
 import pandas as pd
 
 from video_highlight.metrics._window import rolling_sum
@@ -42,7 +41,8 @@ def compute(df: pd.DataFrame, *, window_seconds: int = 10) -> LengthDistResult:
             return pd.concat([events, pd.Series([0.0], index=[max_t])])
         return events
 
-    total_events = _with_end_marker(pd.Series(1.0, index=t))
+    # total spans the stream end by construction, so it needs no padding.
+    total_events = pd.Series(1.0, index=t)
     short_events = _with_end_marker(pd.Series(1.0, index=t[length <= 5]))
     long_events = _with_end_marker(pd.Series(1.0, index=t[length > 15]))
 

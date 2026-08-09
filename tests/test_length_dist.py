@@ -85,3 +85,15 @@ def test_empty_bucket_ratios_are_zero_not_nan():
         + res.long_ratio.loc[13.0]
     )
     assert total == pytest.approx(1.0)
+
+
+def test_partial_bucket_tail_is_not_nan():
+    # long bullet ends before stream end (t=12.0) -> tail ratio must be valid.
+    rows = [
+        {"t": 10.5, "uid": "a", "text": "x", "length": 16},
+        {"t": 12.0, "uid": "b", "text": "x", "length": 5},
+    ]
+    res = compute(_df(rows), window_seconds=10)
+    # At t=13: window [3,13) has both bullets -> long = 1/2, short = 1/2.
+    assert res.long_ratio.loc[13.0] == pytest.approx(0.5)
+    assert res.short_ratio.loc[13.0] == pytest.approx(0.5)
