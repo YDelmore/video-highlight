@@ -30,6 +30,19 @@ def _format_pct(value: float | None) -> str:
     return "--" if value is None else f"{value * 100:.1f}%"
 
 
+def _int_pct(count: int, total: int) -> str:
+    """Integer percentage, or '--' when the denominator is zero."""
+    return f"{count / total * 100:.0f}%" if total else "--"
+
+
+def _candidate_means(series: pd.Series, highlights: list[HighlightCandidate]) -> list[str]:
+    """Per-candidate mean of ``series`` within each highlight window, formatted."""
+    return [
+        f"#{i + 1}: {_format_pct(_mean_in_window(series, h.t_start, h.t_end))}"
+        for i, h in enumerate(highlights)
+    ]
+
+
 def console_print(
     *,
     density: DensityResult,
@@ -103,10 +116,7 @@ def console_print(
             f"峰值: {act_valid.max():.3f} at t={peak_idx:.1f}\n"
         )
         if highlights:
-            means = [
-                f"#{i + 1}: {_format_pct(_mean_in_window(act, h.t_start, h.t_end))}"
-                for i, h in enumerate(highlights)
-            ]
+            means = _candidate_means(act, highlights)
             out.write("候选窗口内平均激活率:  " + "  ".join(means) + "\n")
     else:
         out.write("[WARN] 观测期覆盖全部数据，无有效激活率区间\n")
@@ -129,11 +139,11 @@ def console_print(
             f"长弹幕激增(>30%)窗口数: {int((lr[mask] > 0.30).sum())}\n"
         )
         if highlights:
-            parts = []
-            for i, h in enumerate(highlights):
-                s = _mean_in_window(sr, h.t_start, h.t_end)
-                l = _mean_in_window(lr, h.t_start, h.t_end)
-                parts.append(f"#{i + 1}: {_format_pct(s)}/{_format_pct(l)}")
+            parts = [
+                f"#{i + 1}: {_format_pct(_mean_in_window(sr, h.t_start, h.t_end))}/"
+                f"{_format_pct(_mean_in_window(lr, h.t_start, h.t_end))}"
+                for i, h in enumerate(highlights)
+            ]
             out.write("候选窗口内平均 短/长占比:  " + "  ".join(parts) + "\n")
     else:
         out.write("（无有效长度分布数据）\n")
@@ -147,10 +157,7 @@ def console_print(
             f"均值: {conc_valid.mean():.3f} / 峰值: {conc_valid.max():.3f} at t={peak_idx:.1f}\n"
         )
         if highlights:
-            parts = [
-                f"#{i + 1}: {_format_pct(_mean_in_window(conc, h.t_start, h.t_end))}"
-                for i, h in enumerate(highlights)
-            ]
+            parts = _candidate_means(conc, highlights)
             out.write("候选窗口内均值:  " + "  ".join(parts) + "\n")
     else:
         out.write("（无有效数据）\n")
@@ -175,13 +182,12 @@ def console_print(
     if lifecycle.windows:
         for w in lifecycle.windows:
             total = w.total_users
-            pct = lambda n: (f"{n / total * 100:.0f}%" if total else "--")
             out.write(
                 f"候选 [{w.t_start:.1f},{w.t_end:.1f}] (偏移 A={w.offset_a:.0f}s "
                 f"B={w.offset_b:.0f}s C={w.offset_c:.0f}s): "
-                f"瞬时 {w.instant} ({pct(w.instant)}) / "
-                f"持续 {w.persistent} ({pct(w.persistent)}) / "
-                f"转化 {w.converted} ({pct(w.converted)}) / 窗口用户 {total}\n"
+                f"瞬时 {w.instant} ({_int_pct(w.instant, total)}) / "
+                f"持续 {w.persistent} ({_int_pct(w.persistent, total)}) / "
+                f"转化 {w.converted} ({_int_pct(w.converted, total)}) / 窗口用户 {total}\n"
             )
     else:
         out.write("（无候选窗口）\n")
@@ -189,7 +195,7 @@ def console_print(
     out.write("\n=== 指标8: 回锅用户比例 ===\n")
     if returning.windows:
         for w in returning.windows:
-            ratio_str = "nan" if math.isnan(w.ratio) else f"{w.ratio * 100:.1f}%"
+            ratio_str = _format_pct(w.ratio) if not math.isnan(w.ratio) else "--"
             line = (
                 f"候选 [{w.t_start:.1f},{w.t_end:.1f}]: "
                 f"回锅 {w.returning_count} / 总数 {w.total_users} → {ratio_str}"
@@ -236,11 +242,13 @@ def plot(
     length_dist: LengthDistResult,
     concentration: ConcentrationResult,
     overlap: OverlapResult,
-    lifecycle: LifecycleResult,
-    returning: ReturningResult,
     output_path: str | Path,
 ) -> bool:
-    """Render a 3x3 chart to ``output_path``. Return False if matplotlib unavailable."""
+    """Render a 3x3 chart to ``output_path``. Return False if matplotlib unavailable.
+
+    Metrics 7/8 are per-window console summaries and are intentionally not
+    charted, so they are not parameters here.
+    """
     try:
         import matplotlib
 
