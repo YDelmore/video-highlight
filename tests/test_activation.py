@@ -75,3 +75,12 @@ def test_activation_empty_df():
     assert res.activation.empty
     assert res.n_silent == 0
     assert res.n_active == 0
+
+
+def test_activation_grid_matches_density():
+    """Activation shares the same 1-second grid as density.D (plot alignment)."""
+    from video_highlight.metrics.density import compute as density_compute
+
+    act = compute(SAMPLE_DF)
+    dens = density_compute(SAMPLE_DF)
+    assert act.activation.index.equals(dens.D.index)

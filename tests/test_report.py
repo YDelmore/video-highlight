@@ -177,3 +177,50 @@ def test_plot_returns_true_or_false(tmp_path: Path):
         output_path=out,
     )
     assert isinstance(ok, bool)
+
+
+def test_console_print_warns_when_silent_pool_empty():
+    act = ActivationResult(
+        activation=pd.Series([0.0, 0.0, 0.0], index=[0.0, 1.0, 2.0], dtype=float),
+        silent_uids=frozenset(),
+        active_uids=frozenset({"a1", "a2"}),
+        observation_seconds=0.0,
+        n_silent=0,
+        n_active=2,
+    )
+    buf = io.StringIO()
+    console_print(
+        density=_density(),
+        burst=_burst(),
+        highlights=[],
+        activation=act,
+        length_dist=_length_dist(),
+        danmaku_count=4,
+        duration_seconds=4.0,
+        stream=buf,
+    )
+    assert "[WARN] 无沉默用户，激活率恒为 0" in buf.getvalue()
+
+
+def test_plot_creates_2x3_layout(tmp_path: Path, monkeypatch):
+    captured: dict = {}
+    import matplotlib.pyplot as plt
+
+    real_subplots = plt.subplots
+
+    def spy(*args, **kwargs):
+        fig, axes = real_subplots(*args, **kwargs)
+        captured["shape"] = axes.shape
+        return fig, axes
+
+    monkeypatch.setattr(plt, "subplots", spy)
+    out = tmp_path / "plot.png"
+    plot(
+        _density(),
+        _burst(),
+        [],
+        activation=_activation(),
+        length_dist=_length_dist(),
+        output_path=out,
+    )
+    assert captured["shape"] == (2, 3)

@@ -85,6 +85,8 @@ def console_print(
     out.write(
         f"沉默池: {activation.n_silent} 人 / 活跃: {activation.n_active} 人 (K=2)\n"
     )
+    if activation.n_silent == 0:
+        out.write("[WARN] 无沉默用户，激活率恒为 0\n")
     act = activation.activation
     act_valid = act.dropna()
     if len(act_valid):
