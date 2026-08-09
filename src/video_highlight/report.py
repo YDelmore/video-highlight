@@ -12,8 +12,12 @@ import pandas as pd
 from video_highlight.highlights import HighlightCandidate
 from video_highlight.metrics.activation import ActivationResult
 from video_highlight.metrics.burst import BurstResult
+from video_highlight.metrics.concentration import ConcentrationResult
 from video_highlight.metrics.density import DensityResult
 from video_highlight.metrics.length_dist import LengthDistResult
+from video_highlight.metrics.lifecycle import LifecycleResult
+from video_highlight.metrics.overlap import OverlapResult
+from video_highlight.metrics.returning import ReturningResult
 
 
 def _mean_in_window(series: pd.Series, t_start: float, t_end: float) -> float | None:
@@ -33,6 +37,10 @@ def console_print(
     highlights: list[HighlightCandidate],
     activation: ActivationResult,
     length_dist: LengthDistResult,
+    concentration: ConcentrationResult,
+    overlap: OverlapResult,
+    lifecycle: LifecycleResult,
+    returning: ReturningResult,
     danmaku_count: int,
     duration_seconds: float,
     stream: TextIO = sys.stdout,
@@ -74,9 +82,7 @@ def console_print(
         valid_Srel = burst.S_rel.dropna()
         if len(valid_Srel):
             peak_rel_idx = valid_Srel.idxmax()
-            out.write(
-                f"最大 S_rel: {valid_Srel.max():.3f} at t={peak_rel_idx:.1f}\n"
-            )
+            out.write(f"最大 S_rel: {valid_Srel.max():.3f} at t={peak_rel_idx:.1f}\n")
     else:
         out.write("（无有效 S 数据）\n")
 
@@ -132,11 +138,67 @@ def console_print(
     else:
         out.write("（无有效长度分布数据）\n")
 
+    out.write("\n=== 指标5: 发言集中度 (Top-3, W=10s) ===\n")
+    conc = concentration.concentration
+    conc_valid = conc.dropna()
+    if len(conc_valid):
+        peak_idx = conc_valid.idxmax()
+        out.write(
+            f"均值: {conc_valid.mean():.3f} / 峰值: {conc_valid.max():.3f} at t={peak_idx:.1f}\n"
+        )
+        if highlights:
+            parts = [
+                f"#{i + 1}: {_format_pct(_mean_in_window(conc, h.t_start, h.t_end))}"
+                for i, h in enumerate(highlights)
+            ]
+            out.write("候选窗口内均值:  " + "  ".join(parts) + "\n")
+    else:
+        out.write("（无有效数据）\n")
+
+    out.write("\n=== 指标6: 用户重合度 (30s窗) ===\n")
+    ov = overlap.overlap
+    ov_valid = ov.dropna()
+    if len(ov_valid):
+        out.write(f"均值: {ov_valid.mean():.3f}\n")
+        drops = int((ov_valid < 0.30).sum())
+        out.write(f"重合度跌破30%的窗口数: {drops}\n")
+    else:
+        out.write("（无有效数据）\n")
+
     out.write("\n=== 高潮候选区间（合并后） ===\n")
     if highlights:
         out.write(_format_highlight_table(highlights))
     else:
         out.write("（未检出候选区间；可考虑下调阈值至 1.5σ）\n")
+
+    out.write("\n=== 指标7: 用户生命周期 ===\n")
+    if lifecycle.windows:
+        for w in lifecycle.windows:
+            total = w.total_users
+            pct = lambda n: (f"{n / total * 100:.0f}%" if total else "--")
+            out.write(
+                f"候选 [{w.t_start:.1f},{w.t_end:.1f}] (偏移 A={w.offset_a:.0f}s "
+                f"B={w.offset_b:.0f}s C={w.offset_c:.0f}s): "
+                f"瞬时 {w.instant} ({pct(w.instant)}) / "
+                f"持续 {w.persistent} ({pct(w.persistent)}) / "
+                f"转化 {w.converted} ({pct(w.converted)}) / 窗口用户 {total}\n"
+            )
+    else:
+        out.write("（无候选窗口）\n")
+
+    out.write("\n=== 指标8: 回锅用户比例 ===\n")
+    if returning.windows:
+        for w in returning.windows:
+            ratio_str = "nan" if math.isnan(w.ratio) else f"{w.ratio * 100:.1f}%"
+            line = (
+                f"候选 [{w.t_start:.1f},{w.t_end:.1f}]: "
+                f"回锅 {w.returning_count} / 总数 {w.total_users} → {ratio_str}"
+            )
+            if w.gap_start < 0:
+                line += "  [静默间隙超出流起点]"
+            out.write(line + "\n")
+    else:
+        out.write("（无候选窗口）\n")
 
 
 def _format_highlight_table(highlights: list[HighlightCandidate]) -> str:
@@ -150,27 +212,18 @@ def _format_highlight_table(highlights: list[HighlightCandidate]) -> str:
 
 
 def _configure_cjk_font() -> None:
-    """Prefer a CJK-capable font for Chinese chart labels, when available.
-
-    matplotlib's default fonts lack CJK glyphs (titles render as boxes).
-    Silently no-ops if no CJK font is installed; the caller keeps working.
-    """
+    """Prefer a CJK-capable font for Chinese chart labels, when available."""
     try:
         import matplotlib as mpl
 
-        candidates = [
-            "Microsoft YaHei",  # Windows
-            "SimHei",  # Windows fallback
-            "PingFang SC",  # macOS
-            "Noto Sans CJK SC",  # Linux
-        ]
+        candidates = ["Microsoft YaHei", "SimHei", "PingFang SC", "Noto Sans CJK SC"]
         available = {f.name for f in mpl.font_manager.fontManager.ttflist}
         for name in candidates:
             if name in available:
                 mpl.rcParams["font.family"] = "sans-serif"
                 mpl.rcParams["font.sans-serif"] = [name]
                 return
-    except Exception:  # pragma: no cover - font setup is best-effort
+    except Exception:  # pragma: no cover - best-effort
         return
 
 
@@ -181,9 +234,13 @@ def plot(
     *,
     activation: ActivationResult,
     length_dist: LengthDistResult,
+    concentration: ConcentrationResult,
+    overlap: OverlapResult,
+    lifecycle: LifecycleResult,
+    returning: ReturningResult,
     output_path: str | Path,
 ) -> bool:
-    """Render a 2x3 chart to ``output_path``. Return False if matplotlib unavailable."""
+    """Render a 3x3 chart to ``output_path``. Return False if matplotlib unavailable."""
     try:
         import matplotlib
 
@@ -194,30 +251,18 @@ def plot(
 
     _configure_cjk_font()
 
-    fig, axes = plt.subplots(2, 3, figsize=(16, 8))
+    fig, axes = plt.subplots(3, 3, figsize=(16, 12))
 
-    # (0,0) density + thresholds
     ax = axes[0, 0]
     ax.plot(density.D.index, density.D.values, label="D(t)", color="tab:blue")
     if density.sigma > 0:
-        ax.axhline(
-            density.mu + 2 * density.sigma,
-            color="tab:orange",
-            linestyle="--",
-            label="μ+2σ",
-        )
-        ax.axhline(
-            density.mu + 3 * density.sigma,
-            color="tab:red",
-            linestyle="--",
-            label="μ+3σ",
-        )
+        ax.axhline(density.mu + 2 * density.sigma, color="tab:orange", linestyle="--", label="μ+2σ")
+        ax.axhline(density.mu + 3 * density.sigma, color="tab:red", linestyle="--", label="μ+3σ")
     ax.set_title("弹幕密度 D(t)")
     ax.set_xlabel("t (s)")
     ax.set_ylabel("bullets / 10s")
     ax.legend(loc="best")
 
-    # (0,1) burst S
     ax = axes[0, 1]
     ax.plot(burst.S.index, burst.S.values, label="S(t)", color="tab:purple")
     if burst.sigma_S > 0:
@@ -226,10 +271,8 @@ def plot(
     ax.set_xlabel("t (s)")
     ax.legend(loc="best")
 
-    # (0,2) activation
     ax = axes[0, 2]
-    act = activation.activation
-    ax.plot(act.index, act.values, label="activation(t)", color="tab:red")
+    ax.plot(activation.activation.index, activation.activation.values, label="activation(t)", color="tab:red")
     for pct in (0.4, 0.6, 0.8):
         ax.axhline(pct, color="tab:gray", linestyle=":", linewidth=0.8)
     ax.set_title("沉默用户激活率")
@@ -237,19 +280,12 @@ def plot(
     ax.set_ylim(-0.05, 1.05)
     ax.legend(loc="best")
 
-    # (1,0) S_rel
     ax = axes[1, 0]
-    ax.plot(
-        burst.S_rel.index,
-        burst.S_rel.values,
-        label="S_rel(t)",
-        color="tab:green",
-    )
+    ax.plot(burst.S_rel.index, burst.S_rel.values, label="S_rel(t)", color="tab:green")
     ax.set_title("相对爆发速率 S_rel(t)")
     ax.set_xlabel("t (s)")
     ax.legend(loc="best")
 
-    # (1,1) length ratios
     ax = axes[1, 1]
     sr = length_dist.short_ratio
     lr = length_dist.long_ratio
@@ -262,12 +298,34 @@ def plot(
     ax.set_ylim(-0.05, 1.05)
     ax.legend(loc="best")
 
-    # (1,2) density stem view
     ax = axes[1, 2]
     valid = density.D.dropna()
     ax.vlines(valid.index, 0, valid.values, color="tab:gray", alpha=0.6)
     ax.set_title("密度柱状视图")
     ax.set_xlabel("t (s)")
+
+    ax = axes[2, 0]
+    ax.plot(concentration.concentration.index, concentration.concentration.values, label="top3 share", color="tab:brown")
+    ax.set_title("发言集中度 (Top-3)")
+    ax.set_xlabel("t (s)")
+    ax.set_ylim(-0.05, 1.05)
+    ax.legend(loc="best")
+
+    ax = axes[2, 1]
+    ax.plot(overlap.overlap.index, overlap.overlap.values, label="overlap", color="tab:cyan")
+    ax.axhline(0.30, color="tab:gray", linestyle=":", linewidth=0.8)
+    ax.set_title("用户重合度 (Jaccard)")
+    ax.set_xlabel("t (s)")
+    ax.set_ylim(-0.05, 1.05)
+    ax.legend(loc="best")
+
+    ax = axes[2, 2]
+    ax.plot(density.D.index, density.D.values, color="tab:blue", alpha=0.6)
+    for h in highlights:
+        ax.axvspan(h.t_start, h.t_end, color="tab:orange", alpha=0.25)
+    ax.set_title("候选窗口")
+    ax.set_xlabel("t (s)")
+    ax.set_ylabel("D(t)")
 
     fig.tight_layout()
     fig.savefig(Path(output_path), dpi=120)
