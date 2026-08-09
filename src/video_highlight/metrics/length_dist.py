@@ -34,21 +34,17 @@ def compute(df: pd.DataFrame, *, window_seconds: int = 10) -> LengthDistResult:
     length = df["length"].astype(int).values
     max_t = float(t.max())
 
-    total_events = pd.Series(1.0, index=t)
-    short_events = pd.Series(1.0, index=t[length <= 5])
-    long_events = pd.Series(1.0, index=t[length > 15])
-
-    # rolling_sum derives its 1-second grid from each series' own max time,
-    # so a bucket whose last event precedes the stream end would produce a
-    # shorter grid and misalign in the ratio division below. Pad each bucket
-    # with a zero event at the stream end to force identical grid coverage.
-    def _extend_to_total(events: pd.Series) -> pd.Series:
-        if len(events) and float(events.index.max()) < max_t:
-            events = pd.concat([events, pd.Series([0.0], index=[max_t])])
+    def _with_end_marker(events: pd.Series) -> pd.Series:
+        """Ensure the series spans the full stream grid; append a zero at max_t."""
+        if events.empty:
+            return pd.Series([0.0], index=[max_t])
+        if events.index.max() < max_t:
+            return pd.concat([events, pd.Series([0.0], index=[max_t])])
         return events
 
-    short_events = _extend_to_total(short_events)
-    long_events = _extend_to_total(long_events)
+    total_events = _with_end_marker(pd.Series(1.0, index=t))
+    short_events = _with_end_marker(pd.Series(1.0, index=t[length <= 5]))
+    long_events = _with_end_marker(pd.Series(1.0, index=t[length > 15]))
 
     total_window = rolling_sum(total_events, window_seconds=window_seconds)
     short_window = rolling_sum(short_events, window_seconds=window_seconds)

@@ -66,3 +66,22 @@ def test_empty_df():
     res = compute(empty)
     assert res.short_ratio.empty
     assert res.long_ratio.empty
+
+
+def test_empty_bucket_ratios_are_zero_not_nan():
+    # No long bullets in the stream -> long_ratio must be 0, and ratios sum to 1.
+    rows = [
+        {"t": 10.0, "uid": "a", "text": "x", "length": 5},
+        {"t": 11.0, "uid": "b", "text": "x", "length": 6},
+        {"t": 12.0, "uid": "c", "text": "x", "length": 15},
+    ]
+    res = compute(_df(rows), window_seconds=10)
+    # At t=13: window [3,13) has 3 bullets, all short/mid.
+    assert res.short_ratio.loc[13.0] == pytest.approx(1 / 3)
+    assert res.long_ratio.loc[13.0] == pytest.approx(0.0)
+    total = (
+        res.short_ratio.loc[13.0]
+        + res.mid_ratio.loc[13.0]
+        + res.long_ratio.loc[13.0]
+    )
+    assert total == pytest.approx(1.0)
