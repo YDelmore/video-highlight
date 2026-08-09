@@ -19,16 +19,20 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess:
     )
 
 
+NEW_XML = "docs/2026-08-07-22-24-43-052-解说一下今天比赛.xml"
+
+
 def test_cli_on_real_dataset(project_root: Path):
-    """Running on docs/danmaku.xml exits 0 and prints all four metric sections."""
-    xml = project_root / "docs" / "danmaku.xml"
+    """Running on the new XML exits 0 and prints all eight metric sections."""
+    xml = project_root / NEW_XML
     assert xml.exists(), f"fixture missing: {xml}"
     result = _run_cli(str(xml))
     assert result.returncode == 0, f"stderr: {result.stderr}"
-    assert "=== 指标1: 弹幕密度" in result.stdout
-    assert "=== 指标2: 爆发速率" in result.stdout
-    assert "=== 指标3: 沉默用户激活率" in result.stdout
-    assert "=== 指标4: 弹幕长度分布" in result.stdout
+    for marker in [
+        "=== 指标1", "=== 指标2", "=== 指标3", "=== 指标4",
+        "=== 指标5", "=== 指标6", "=== 指标7", "=== 指标8",
+    ]:
+        assert marker in result.stdout
 
 
 def test_cli_missing_file(tmp_path: Path):
@@ -37,9 +41,9 @@ def test_cli_missing_file(tmp_path: Path):
     assert "file not found" in result.stdout
 
 
-def test_cli_no_args_defaults_to_docs_danmaku(project_root: Path):
-    """With no arguments, running from the project root uses docs/danmaku.xml."""
-    assert (project_root / "docs" / "danmaku.xml").exists()
+def test_cli_no_args_defaults_to_new_xml(project_root: Path):
+    """With no arguments, running from the project root uses the new XML."""
+    assert (project_root / NEW_XML).exists()
     result = _run_cli()
     assert result.returncode == 0, f"stderr: {result.stderr}"
     assert "=== 指标1: 弹幕密度" in result.stdout

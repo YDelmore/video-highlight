@@ -10,8 +10,12 @@ from video_highlight.highlights import find_candidates
 from video_highlight.loader import to_dataframe
 from video_highlight.metrics.activation import compute as compute_activation
 from video_highlight.metrics.burst import compute as compute_burst
+from video_highlight.metrics.concentration import compute as compute_concentration
 from video_highlight.metrics.density import compute as compute_density
 from video_highlight.metrics.length_dist import compute as compute_length_dist
+from video_highlight.metrics.lifecycle import compute as compute_lifecycle
+from video_highlight.metrics.overlap import compute as compute_overlap
+from video_highlight.metrics.returning import compute as compute_returning
 from video_highlight.parser import parse_xml
 from video_highlight.report import console_print, plot
 
@@ -26,14 +30,15 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         type=Path,
         nargs="?",
         default=None,
-        help="Path to danmaku XML file. When omitted, docs/danmaku.xml in the "
-        "current directory is used if present.",
+        help="Path to danmaku XML file. When omitted, "
+        "docs/2026-08-07-22-24-43-052-解说一下今天比赛.xml in the current "
+        "directory is used if present.",
     )
     parser.add_argument(
         "--plot",
         type=Path,
         default=None,
-        help="If provided, save a 2x3 summary chart to this PNG path. "
+        help="If provided, save a 3x3 summary chart to this PNG path. "
         "Requires matplotlib (pip install 'video-highlight[plot]').",
     )
     return parser.parse_args(argv)
@@ -50,12 +55,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.xml_path is None:
         # Convenience default for IDE "Run" / interactive use: pick the
         # repo's sample file when present, otherwise fail with usage.
-        default_xml = Path("docs/danmaku.xml")
+        default_xml = Path("docs/2026-08-07-22-24-43-052-解说一下今天比赛.xml")
         if default_xml.is_file():
             args.xml_path = default_xml
         else:
             print(
-                "video-highlight: no xml_path given and no docs/danmaku.xml "
+                "video-highlight: no xml_path given and no "
+                "docs/2026-08-07-22-24-43-052-解说一下今天比赛.xml "
                 "found in the current directory"
             )
             print("usage: video-highlight <path-to-xml> [--plot OUT]")
@@ -72,6 +78,10 @@ def main(argv: list[str] | None = None) -> int:
     highlights = find_candidates(density)
     activation = compute_activation(df)
     length_dist = compute_length_dist(df)
+    concentration = compute_concentration(df)
+    overlap = compute_overlap(df)
+    lifecycle = compute_lifecycle(df, highlights)
+    returning = compute_returning(df, highlights)
 
     console_print(
         density=density,
@@ -79,6 +89,10 @@ def main(argv: list[str] | None = None) -> int:
         highlights=highlights,
         activation=activation,
         length_dist=length_dist,
+        concentration=concentration,
+        overlap=overlap,
+        lifecycle=lifecycle,
+        returning=returning,
         danmaku_count=len(records),
         duration_seconds=density.duration_seconds,
     )
@@ -90,6 +104,8 @@ def main(argv: list[str] | None = None) -> int:
             highlights=highlights,
             activation=activation,
             length_dist=length_dist,
+            concentration=concentration,
+            overlap=overlap,
             output_path=args.plot,
         )
         if ok:
