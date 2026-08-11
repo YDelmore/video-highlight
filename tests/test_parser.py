@@ -52,3 +52,21 @@ def test_parse_xml_raises_on_invalid_xml(tmp_path: Path):
 def test_parse_xml_missing_file(tmp_path: Path):
     with pytest.raises(FileNotFoundError):
         parse_xml(tmp_path / "no-such.xml")
+
+
+# ---------------------------------------------------------------------------
+# Uploaded bytes (Streamlit file_uploader)
+# ---------------------------------------------------------------------------
+
+def test_parse_xml_bytes_matches_file_path(sample_xml_path: Path):
+    """Raw bytes give the same records as the on-disk path."""
+    content = sample_xml_path.read_bytes()
+    by_bytes = parse_xml(content, name=sample_xml_path.name)
+    by_path = parse_xml(sample_xml_path)
+    assert by_bytes == by_path
+
+
+def test_parse_xml_bytes_raises_on_invalid_xml():
+    with pytest.raises(DanmakuParseError) as excinfo:
+        parse_xml(b"this is not xml at all <><><>", name="broken.xml")
+    assert "broken.xml" in str(excinfo.value)

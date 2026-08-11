@@ -9,14 +9,20 @@ requires-python = ">=3.12"
 dependencies = [
     "pandas>=2.0,<3.0",
     "numpy>=1.24,<3.0",
+    "pandas-stubs~=2.3.3",
 ]
 
 [project.optional-dependencies]
 plot = ["matplotlib>=3.7"]
-dev = ["pytest>=7.0", "matplotlib>=3.7"]
+app = ["streamlit>=1.40", "plotly>=5.20"]
+dev = ["pytest>=7.0", "matplotlib>=3.7", "kaleido>=0.2"]
 
 [project.scripts]
 video-highlight = "video_highlight:main"
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]

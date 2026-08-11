@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 
 from video_highlight.exceptions import DanmakuParseError
@@ -22,14 +23,28 @@ class Danmaku:
     text: str
 
 
-def parse_xml(path: str | Path) -> list[Danmaku]:
-    """Parse a danmaku XML file into a list of Danmaku records.
+def parse_xml(
+    source: str | Path | bytes,
+    *,
+    name: str | None = None,
+) -> list[Danmaku]:
+    """Parse a danmaku XML from a file path or raw bytes into Danmaku records.
 
-    Skips <d> nodes that lack `uid` or `timestamp` attributes (logging via
-    caller observability later if needed). Raises DanmakuParseError if the
-    file cannot be parsed at all.
+    ``bytes`` input is for uploaded files (Streamlit file_uploader); ``name``
+    is shown in error messages when the content came from bytes rather than a
+    path. Skips <d> nodes that lack `uid` or `timestamp` attributes (logging
+    via caller observability later if needed). Raises DanmakuParseError if the
+    input cannot be parsed at all.
     """
-    path = Path(path)
+    if isinstance(source, bytes):
+        display = name or "<uploaded>"
+        try:
+            tree = ET.parse(BytesIO(source))
+        except ET.ParseError as exc:
+            raise DanmakuParseError(str(display), str(exc)) from exc
+        return _extract_records(tree, str(display))
+
+    path = Path(source)
     if not path.exists():
         raise FileNotFoundError(f"danmaku file not found: {path}")
 
@@ -37,7 +52,11 @@ def parse_xml(path: str | Path) -> list[Danmaku]:
         tree = ET.parse(path)
     except ET.ParseError as exc:
         raise DanmakuParseError(str(path), str(exc)) from exc
+    return _extract_records(tree, str(path))
 
+
+def _extract_records(tree: ET.ElementTree, display: str) -> list[Danmaku]:
+    """Walk the parsed tree for <d> nodes (shared by path and bytes input)."""
     records: list[Danmaku] = []
     skipped = 0
     for node in tree.iter("d"):
@@ -57,8 +76,6 @@ def parse_xml(path: str | Path) -> list[Danmaku]:
 
     if not records and skipped > 0:
         # All nodes were malformed; treat as parse failure
-        raise DanmakuParseError(
-            str(path), f"all {skipped} <d> nodes were malformed"
-        )
+        raise DanmakuParseError(display, f"all {skipped} <d> nodes were malformed")
 
     return records
