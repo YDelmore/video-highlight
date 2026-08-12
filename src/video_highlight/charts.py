@@ -50,6 +50,18 @@ REF_DOT = "#898781"  # dotted threshold guides
 _X_TITLE = "t (s)"
 
 
+def fmt_hms(t: float) -> str:
+    """Format elapsed seconds as HH:MM:SS (hover tooltips, clock annotation).
+
+    ``t`` is seconds since the stream origin (first danmaku = 0), matching
+    the loader's relative ``t`` column and the platform master clock.
+    """
+    t = max(int(t), 0)
+    h, rem = divmod(t, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
 def _base_layout(
     *,
     title: str,
@@ -106,7 +118,7 @@ def _add_vline(fig: go.Figure, t_current: float, *, annotate: bool = False) -> N
         layer="above",
     )
     if annotate:
-        kwargs["annotation_text"] = f"当前 t={float(t_current):.0f}s"
+        kwargs["annotation_text"] = f"当前 {fmt_hms(t_current)}"
         kwargs["annotation_position"] = "top right"
         kwargs["annotation_font"] = dict(color=INK, size=11)
     fig.add_vline(**kwargs)
@@ -143,7 +155,11 @@ def line_figure(
                 line=dict(color=color, width=2),
                 connectgaps=False,
                 hoverinfo="y" if label else "skip",
-                hovertemplate="%{y:.2f}<extra>%{fullData.name}</extra>",
+                customdata=[[fmt_hms(x)] for x in s.index],
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>%{y:.2f}"
+                    "<extra>%{fullData.name}</extra>"
+                ),
             )
         )
     for value, color, dash in ref_lines:
@@ -165,14 +181,19 @@ def line_figure(
 # Metric charts
 # ---------------------------------------------------------------------------
 
-def density_figure(density: DensityResult, t_current: float | None = None) -> go.Figure:
+def density_figure(
+    density: DensityResult,
+    t_current: float | None = None,
+    *,
+    window_seconds: int = 10,
+) -> go.Figure:
     refs: list[tuple[float, str, str]] = []
     if density.sigma > 0:
         refs.append((density.mu + 2 * density.sigma, REF_MID, "dash"))
         refs.append((density.mu + 3 * density.sigma, REF_HL, "dash"))
     return line_figure(
         title="指标1 · 弹幕密度 D(t)",
-        y_title="条 / 10s",
+        y_title=f"条 / {window_seconds}s",
         series=[("D(t)", density.D, DENSITY)],
         ref_lines=refs,
         t_current=t_current,
@@ -272,7 +293,10 @@ def heat_figure(
             fill="tozeroy",
             fillcolor="rgba(37,107,191,0.15)",
             connectgaps=False,
-            hovertemplate="%{y:.3f}<extra>综合热度</extra>",
+            customdata=[[fmt_hms(x)] for x in heat.index],
+            hovertemplate=(
+                "%{customdata[0]}<br>热度 %{y:.3f}<extra>综合热度</extra>"
+            ),
         )
     )
     for c in candidates:
@@ -329,7 +353,15 @@ def event_map_figure(
             _grade_text_color(c.grade) if c.grade else INK for c in candidates
         ]
         custom = [
-            [i, c.t_start, c.t_end, round(c.score, 3), c.grade]
+            [
+                i,
+                c.t_start,
+                c.t_end,
+                round(c.score, 3),
+                c.grade,
+                fmt_hms(c.t_start),
+                fmt_hms(c.t_end),
+            ]
             for i, c in enumerate(candidates)
         ]
         fig.add_trace(
@@ -346,7 +378,8 @@ def event_map_figure(
                 hovertemplate=(
                     "<b>高潮 #%{customdata[0]}</b> "
                     "等级 %{customdata[4]}<br>"
-                    "[%{customdata[1]:.0f}, %{customdata[2]:.0f}]s · "
+                    "%{customdata[5]} → %{customdata[6]} "
+                    "(%{customdata[1]:.0f}–%{customdata[2]:.0f}s) · "
                     "评分 %{customdata[3]:.3f}<br>"
                     "<b>点击跳转到该高潮起点</b><extra></extra>"
                 ),
