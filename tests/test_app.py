@@ -158,6 +158,7 @@ def test_session_mode_aggregates_chunks(tmp_path, chunk_xml) -> None:
     (streamer_dir / "chunk1.xml").write_text(
         '<?xml version="1.0" encoding="utf-8"?><i><metadata>'
         f"<platform>HuYa</platform><user_name>主播</user_name><room_id>42</room_id>"
+        f"<room_title>测试直播</room_title>"
         f"<live_start_time>{live}</live_start_time></metadata>"
         f'<d p="0,1,25,16777215,{live + 1000},0,1,0,0" user="\x01bad"'
         f' uid="1" timestamp="{live + 1000}">hi</d></i>',
@@ -181,7 +182,8 @@ def test_session_mode_aggregates_chunks(tmp_path, chunk_xml) -> None:
     assert any("已修复" in w for w in warnings)
     assert any("chunk1.xml" in w for w in warnings)
     captions = [c.value for c in at.caption]
-    assert any("分片聚合" in c for c in captions)
+    # the source label shows 年月日 + 序号 instead of the room title
+    assert any("第1场" in c and "分片聚合" in c for c in captions)
 
 
 def test_session_mode_cascade_selects_platform_streamer_session(
@@ -231,12 +233,13 @@ def test_session_mode_time_interval_filters_records(tmp_path, chunk_xml) -> None
     streamer_dir = pathlib.Path(tmp_path) / "HuYa" / "主播"
     streamer_dir.mkdir(parents=True, exist_ok=True)
     live = 1_786_000_000_000
+    # Timeline origin = first danmaku (live+60s), so t = 0/100/300/400s.
     (streamer_dir / "chunk1.xml").write_text(
         chunk_xml(
             live,
             user="主播",
-            nodes=[("uid_a", live + 100_000, "early1"),
-                   ("uid_b", live + 150_000, "early2")],
+            nodes=[("uid_a", live + 60_000, "early1"),
+                   ("uid_b", live + 160_000, "early2")],
         ),
         encoding="utf-8",
     )
@@ -244,8 +247,8 @@ def test_session_mode_time_interval_filters_records(tmp_path, chunk_xml) -> None
         chunk_xml(
             live,
             user="主播",
-            nodes=[("uid_c", live + 2_000_000, "late1"),
-                   ("uid_d", live + 2_100_000, "late2")],
+            nodes=[("uid_c", live + 360_000, "late1"),
+                   ("uid_d", live + 460_000, "late2")],
         ),
         encoding="utf-8",
     )
@@ -255,15 +258,16 @@ def test_session_mode_time_interval_filters_records(tmp_path, chunk_xml) -> None
     values = {m.label: m.value for m in at.metric}
     assert values["弹幕总数"] == "4"  # full session by default
 
-    # narrow the range to [60, 300]s of the stream and apply it
+    # narrow the range to [60, 360]s of the stream and apply it
     # (range_value is now an HH:MM:SS select_slider)
-    next(s for s in at.select_slider if s.key == "range_value").set_value((60, 300))
+    next(s for s in at.select_slider if s.key == "range_value").set_value((60, 360))
     at.run()
     next(b for b in at.button if b.key == "apply_range").click()
     at.run()
 
     assert not at.exception
     values = {m.label: m.value for m in at.metric}
-    assert values["弹幕总数"] == "2"  # only early1/early2 fall inside [60,300]
+    # only t=100 (early2) and t=300 (late1) fall inside [60, 360]
+    assert values["弹幕总数"] == "2"
     captions = [c.value for c in at.caption]
     assert any("00:01:00" in c for c in captions)

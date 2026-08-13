@@ -16,7 +16,7 @@ Run: ``uv run streamlit run src/video_highlight/app.py``
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import time, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -93,11 +93,6 @@ class SourceConfig:
     interval: tuple[int, int]
 
 
-def _fmt_session_start(live_start_ms: int) -> str:
-    """Wall-clock live start as ``MM-DD HH:MM`` for the session picker."""
-    return datetime.fromtimestamp(live_start_ms / 1000).strftime("%m-%d %H:%M")
-
-
 @st.cache_data
 def _discover_sessions_cached(
     root: str,
@@ -159,13 +154,14 @@ def load_analysis_interval(
 
     A full 24h stream spreads the density signal over tens of thousands of
     seconds and dilutes the highlights, so the user picks a sub-interval to
-    focus on. ``live_start_ms`` anchors the timeline so ``t`` stays absolute
-    stream time (the master slider spans the interval in place). Cached per
+    focus on. There is no reliable ``live_start_time``, so the timeline is
+    anchored at the session's first danmaku (``t=0``), matching the loader's
+    default; the master slider spans the interval in place. Cached per
     (session, window, start, end) so dragging the range slider only recomputes
     when the interval is actually applied.
     """
     records, notes = load_session_records(session)
-    live = session.live_start_ms
+    live = records[0].ts_ms if records else 0
     lo = live + start_seconds * 1000
     hi = live + end_seconds * 1000
     filtered = [r for r in records if lo <= r.ts_ms <= hi]
@@ -350,28 +346,28 @@ def _session_controls(root: str) -> tuple[DanmakuSession | None, tuple[int, int]
     chosen = [
         s for s in sessions if s.platform == platform and s.user_name == streamer
     ]
-    labels = [
-        f"{s.title}｜{_fmt_session_start(s.live_start_ms)}（{len(s.chunks)}分片）"
-        for s in chosen
-    ]
+    labels = [f"{s.label}（{len(s.chunks)}分片）" for s in chosen]
     session = chosen[
         st.sidebar.selectbox(
             "直播场次",
             list(range(len(chosen))),
             format_func=lambda i: labels[i],
             key="sel_session",
-            help="同一场直播的所有分片会在后台聚合为连续时间轴。",
+            help="同一场直播的所有分片会在后台聚合为连续时间轴。"
+            "分场按文件创建时间排序，相邻分片的上一文件修改时间与下一文件创建时间"
+            "间隔 ≤1 小时且标题相同才视为同一场。",
         )
     ]
 
     records, _notes = load_session_records(session)
     if not records:
         return session, (0, 0)
-    duration = max(int((max(r.ts_ms for r in records) - session.live_start_ms) / 1000), 1)
+    origin = records[0].ts_ms
+    duration = max(int((records[-1].ts_ms - origin) / 1000), 1)
 
     # Reset the picked range when switching to a different session.
-    if st.session_state.get("range_session_live") != session.live_start_ms:
-        st.session_state["range_session_live"] = session.live_start_ms
+    if st.session_state.get("range_session_key") != session.key:
+        st.session_state["range_session_key"] = session.key
         st.session_state["range_value"] = (0, duration)
 
     opts = list(range(0, duration, 60))
@@ -389,8 +385,8 @@ def _session_controls(root: str) -> tuple[DanmakuSession | None, tuple[int, int]
     if not isinstance(picked, (tuple, list)):
         picked = (picked, picked)
     picked = (int(picked[0]), int(picked[1]))
-    lo = session.live_start_ms + picked[0] * 1000
-    hi = session.live_start_ms + picked[1] * 1000
+    lo = origin + picked[0] * 1000
+    hi = origin + picked[1] * 1000
     n_in = sum(1 for r in records if lo <= r.ts_ms <= hi)
     st.sidebar.caption(
         f"区间 {charts.fmt_hms(picked[0])} → {charts.fmt_hms(picked[1])}｜"
@@ -398,9 +394,9 @@ def _session_controls(root: str) -> tuple[DanmakuSession | None, tuple[int, int]
     )
     if st.sidebar.button("应用区间分析", key="apply_range"):
         st.session_state["applied_interval"] = tuple(picked)
-        st.session_state["applied_interval_live"] = session.live_start_ms
+        st.session_state["applied_interval_key"] = session.key
 
-    if st.session_state.get("applied_interval_live") == session.live_start_ms:
+    if st.session_state.get("applied_interval_key") == session.key:
         interval = st.session_state["applied_interval"]
     else:
         interval = (0, duration)
@@ -546,7 +542,7 @@ if cfg.mode == SESSION_MODE:
         interval_note = (
             f"｜区间 {charts.fmt_hms(cfg.interval[0])} → {charts.fmt_hms(cfg.interval[1])}"
         )
-    source_label = f"整场直播：{session.title}（{len(session.chunks)} 分片聚合）{interval_note}"
+    source_label = f"整场直播：{session.label}（{len(session.chunks)} 分片聚合）{interval_note}"
     _sessions, unclassified = _discover_sessions_cached(cfg.root)
 else:
     if cfg.uploaded is not None:
@@ -577,7 +573,7 @@ if cfg.mode == SESSION_MODE:
     for fn, err in notes.skipped:
         st.warning(f"分片 {fn} 无法解析，已跳过：{err}")
     if unclassified:
-        st.caption(f"另有 {len(unclassified)} 个 XML 缺少 live_start_time，未归入任何场次。")
+        st.caption(f"另有 {len(unclassified)} 个 XML 缺少平台/主播信息，未归入任何场次。")
 
 # Master timeline spans the analysed interval, and the clock starts at it.
 slider_min = analysis.t_min
