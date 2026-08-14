@@ -24,7 +24,11 @@ import streamlit as st
 
 from video_highlight import charts
 from video_highlight.exceptions import DanmakuParseError
-from video_highlight.highlights import HighlightCandidate, find_candidates
+from video_highlight.highlights import (
+    DetectionParams,
+    HighlightCandidate,
+    find_candidates,
+)
 from video_highlight.loader import to_dataframe
 from video_highlight.metrics.activation import (
     ActivationResult,
@@ -53,6 +57,11 @@ from video_highlight.metrics.lifecycle import (
 from video_highlight.metrics.overlap import (
     OverlapResult,
     compute as compute_overlap,
+)
+from video_highlight.metrics.repeat import (
+    RepeatResult,
+    compute as compute_repeat,
+    spam_exclude_mask,
 )
 from video_highlight.metrics.returning import (
     ReturningResult,
@@ -119,20 +128,31 @@ class Analysis:
     n_records: int
     window_seconds: int
     t_min: float
+    spam_excluded_seconds: int = 0
+    threshold_mode: str = "sigma"
 
 
 @st.cache_data
-def load_analysis(xml_path: str, window_seconds: int = 10) -> Analysis:
-    """Parse + run every implemented metric; cached per (XML path, window)."""
-    return _build_analysis(parse_xml(xml_path), window_seconds)
+def load_analysis(
+    xml_path: str,
+    window_seconds: int = 10,
+    detection: DetectionParams = DetectionParams(),
+) -> Analysis:
+    """Parse + run every implemented metric; cached per (XML path, window, detection)."""
+    return _build_analysis(parse_xml(xml_path), window_seconds, detection=detection)
 
 
 @st.cache_data
 def load_analysis_upload(
-    xml_name: str, xml_bytes: bytes, window_seconds: int = 10
+    xml_name: str,
+    xml_bytes: bytes,
+    window_seconds: int = 10,
+    detection: DetectionParams = DetectionParams(),
 ) -> Analysis:
-    """Same pipeline for an uploaded file; cached per (name, content, window)."""
-    return _build_analysis(parse_xml(xml_bytes, name=xml_name), window_seconds)
+    """Same pipeline for an uploaded file; cached per (name, content, window, detection)."""
+    return _build_analysis(
+        parse_xml(xml_bytes, name=xml_name), window_seconds, detection=detection
+    )
 
 
 @st.cache_data
@@ -149,6 +169,7 @@ def load_analysis_interval(
     window_seconds: int,
     start_seconds: int,
     end_seconds: int,
+    detection: DetectionParams = DetectionParams(),
 ) -> tuple[Analysis, SessionNotes]:
     """Analyse the session, but only the danmaku inside ``[start, end]``.
 
@@ -157,8 +178,8 @@ def load_analysis_interval(
     focus on. There is no reliable ``live_start_time``, so the timeline is
     anchored at the session's first danmaku (``t=0``), matching the loader's
     default; the master slider spans the interval in place. Cached per
-    (session, window, start, end) so dragging the range slider only recomputes
-    when the interval is actually applied.
+    (session, window, start, end, detection) so dragging the range slider only
+    recomputes when the interval is actually applied.
     """
     records, notes = load_session_records(session)
     live = records[0].ts_ms if records else 0
@@ -166,7 +187,9 @@ def load_analysis_interval(
     hi = live + end_seconds * 1000
     filtered = [r for r in records if lo <= r.ts_ms <= hi]
     return (
-        _build_analysis(filtered, window_seconds, live_start_ms=live),
+        _build_analysis(
+            filtered, window_seconds, detection=detection, live_start_ms=live
+        ),
         notes,
     )
 
@@ -175,30 +198,48 @@ def _build_analysis(
     records: list[Danmaku],
     window_seconds: int = 10,
     *,
+    detection: DetectionParams = DetectionParams(),
     live_start_ms: int | None = None,
 ) -> Analysis:
     """Run every implemented metric over parsed records (uncached core).
 
     ``window_seconds`` is the danmaku aggregation window (default 10s): it
     drives density (and thus burst, highlights, lifecycle, returning) plus
-    activation, length distribution and concentration. Overlap keeps its own
-    30s design window for cross-window user re-entry detection.
+    activation, length distribution, concentration and the repeat-text spam
+    filter. Overlap keeps its own 30s design window for cross-window user
+    re-entry detection.
 
-    ``live_start_ms`` anchors the timeline for aggregated chunked sessions;
-    when omitted (single-file input) the first bullet lands at t=0.
+    ``detection`` carries the highlight-detection knobs (threshold baseline,
+    minimum duration, spam filter thresholds, ...). ``live_start_ms`` anchors
+    the timeline for aggregated chunked sessions; when omitted (single-file
+    input) the first bullet lands at t=0.
     """
     df = to_dataframe(records, live_start_ms=live_start_ms)
     density = compute_density(df, window_seconds=window_seconds)
     burst = compute_burst(density)
-    highlights = find_candidates(density)
+    concentration = compute_concentration(df, window_seconds=window_seconds)
+    overlap = compute_overlap(df)
+    repeat = compute_repeat(df, window_seconds=window_seconds)
+    exclude = spam_exclude_mask(
+        repeat,
+        concentration,
+        max_ratio=detection.spam_max_ratio,
+        conc_threshold=detection.spam_concentration,
+    )
+    highlights = find_candidates(
+        density,
+        exclude=exclude,
+        merge_overlap=overlap.overlap,
+        **detection.find_kwargs(),
+    )
     return Analysis(
         df=df,
         density=density,
         burst=burst,
         activation=compute_activation(df, window_seconds=window_seconds),
         length_dist=compute_length_dist(df, window_seconds=window_seconds),
-        concentration=compute_concentration(df, window_seconds=window_seconds),
-        overlap=compute_overlap(df),
+        concentration=concentration,
+        overlap=overlap,
         lifecycle=compute_lifecycle(df, highlights),
         returning=compute_returning(df, highlights),
         highlights=highlights,
@@ -206,6 +247,8 @@ def _build_analysis(
         n_records=len(records),
         window_seconds=int(window_seconds),
         t_min=float(df["t"].min()) if not df.empty else 0.0,
+        spam_excluded_seconds=int(exclude.sum()),
+        threshold_mode=detection.threshold_mode,
     )
 
 
@@ -407,7 +450,9 @@ def _session_controls(root: str) -> tuple[DanmakuSession | None, tuple[int, int]
 # Sidebar controls
 # --------------------------------------------------------------------------
 
-def _sidebar_controls() -> tuple[SourceConfig, int, MetricWeights, GradeThresholds]:
+def _sidebar_controls() -> tuple[
+    SourceConfig, int, MetricWeights, GradeThresholds, DetectionParams
+]:
     st.sidebar.header("数据源")
     mode = st.sidebar.radio(
         "数据源",
@@ -450,6 +495,51 @@ def _sidebar_controls() -> tuple[SourceConfig, int, MetricWeights, GradeThreshol
         key="window_seconds",
         help="弹幕聚合窗口，默认 10s。影响弹幕密度、爆发速率、激活率、"
         "长度分布、集中度及高潮候选区间；用户重合度（指标6）使用独立窗口。",
+    )
+
+    st.sidebar.header("高潮检测参数")
+    with st.sidebar.expander("候选检测（高级）", expanded=False):
+        threshold_mode = st.selectbox(
+            "阈值基线",
+            ["sigma", "robust", "percentile"],
+            index=0,
+            key="thr_mode",
+            help="sigma=μ+kσ（策略默认）；robust=中位数+k·MAD，抗离群尖峰抬"
+            "高阈值；percentile=密度曲线分位数。",
+        )
+        candidate_sigma = st.slider(
+            "候选阈值倍数 k", 1.0, 4.0, 2.0, 0.1, key="cand_sigma",
+            help="候选阈值 = 基线 + k×σ/MAD（或分位数模式的 k 无关）。",
+        )
+        strong_sigma = st.slider(
+            "强候选阈值倍数", 2.0, 6.0, 3.0, 0.1, key="strong_sigma",
+        )
+        min_duration = st.slider(
+            "最短候选时长（秒）", 0, 300, 3, 1, key="min_duration",
+            help="丢弃短于此的候选（过滤单秒噪声尖峰）。",
+        )
+        merge_gap = st.slider(
+            "候选合并间隔（秒）", 5, 180, 30, 5, key="merge_gap",
+            help="间隔短于此且用户重合度达标的相邻候选合并为一段。",
+        )
+        spam_max_ratio = st.slider(
+            "刷屏重复占比阈值", 0.50, 1.00, 0.80, 0.05, key="spam_ratio",
+            help="窗口内重复文本占比 ≥ 此值 且 Top-3 集中度达标 → 判定为刷屏秒，"
+            "从候选排除。",
+        )
+        spam_conc = st.slider(
+            "刷屏集中度阈值", 0.30, 1.00, 0.60, 0.05, key="spam_conc",
+            help="Top-3 发言占比 ≥ 此值才视为少数人垄断刷屏；真正的队形仪式"
+            "集中度低，不会被误杀。",
+        )
+    detection = DetectionParams(
+        threshold_mode=threshold_mode,
+        candidate_sigma=float(candidate_sigma),
+        strong_sigma=float(strong_sigma),
+        min_duration_seconds=float(min_duration),
+        merge_gap_seconds=float(merge_gap),
+        spam_max_ratio=float(spam_max_ratio),
+        spam_concentration=float(spam_conc),
     )
 
     st.sidebar.header("权重配置")
@@ -503,6 +593,7 @@ def _sidebar_controls() -> tuple[SourceConfig, int, MetricWeights, GradeThreshol
         window_seconds,
         weights,
         thresholds,
+        detection,
     )
 
 
@@ -529,14 +620,16 @@ if jump is not None:
     st.session_state.pop("timeline_slider", None)
 t_current = float(st.session_state.get("current_time", 0.0))
 
-cfg, window_seconds, weights, thresholds = _sidebar_controls()
+cfg, window_seconds, weights, thresholds, detection = _sidebar_controls()
 
 if cfg.mode == SESSION_MODE:
     if cfg.session is None:
         st.error(f"在 {cfg.root} 下未发现任何弹幕分片 XML。")
         st.stop()
     session = cfg.session
-    analysis, notes = load_analysis_interval(session, window_seconds, *cfg.interval)
+    analysis, notes = load_analysis_interval(
+        session, window_seconds, *cfg.interval, detection
+    )
     interval_note = ""
     if cfg.interval[0] > 0 or cfg.interval[1] < max(int(analysis.duration), 1):
         interval_note = (
@@ -548,7 +641,7 @@ else:
     if cfg.uploaded is not None:
         try:
             analysis = load_analysis_upload(
-                cfg.uploaded.name, cfg.uploaded.getvalue(), window_seconds
+                cfg.uploaded.name, cfg.uploaded.getvalue(), window_seconds, detection
             )
         except DanmakuParseError as exc:
             st.error(f"解析上传文件失败（{cfg.uploaded.name}）：{exc}")
@@ -559,14 +652,20 @@ else:
             st.error(f"找不到弹幕文件：{cfg.xml_path}")
             st.info("请在上方上传弹幕 XML 文件，或在侧边栏「数据源」填入正确的路径。")
             st.stop()
-        analysis = load_analysis(str(cfg.xml_path), window_seconds)
+        analysis = load_analysis(str(cfg.xml_path), window_seconds, detection)
         source_label = f"本地文件：{cfg.xml_path}"
 
 if analysis.n_records == 0:
     st.warning("该数据源未解析出任何弹幕。")
     st.stop()
 
-st.caption(f"数据源：{source_label}｜弹幕窗口 W={analysis.window_seconds}s")
+detection_note = (
+    f"阈值基线 {analysis.threshold_mode}｜"
+    f"已排除 {analysis.spam_excluded_seconds} 个刷屏秒级窗口"
+)
+st.caption(
+    f"数据源：{source_label}｜弹幕窗口 W={analysis.window_seconds}s｜{detection_note}"
+)
 if cfg.mode == SESSION_MODE:
     for fn, reason in notes.recovered:
         st.warning(f"分片 {fn}：{reason}（已修复后纳入聚合）")

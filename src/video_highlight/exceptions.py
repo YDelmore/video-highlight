@@ -13,3 +13,7 @@ class DanmakuParseError(DanmakuError):
         super().__init__(f"failed to parse {path}{suffix}: {message}")
         self.path = path
         self.line_number = line_number
+
+
+class ClipperError(DanmakuError):
+    """Raised when highlight clipping cannot be planned or executed."""

@@ -56,9 +56,18 @@ def console_print(
     returning: ReturningResult,
     danmaku_count: int,
     duration_seconds: float,
+    candidate_threshold: float | None = None,
+    strong_threshold: float | None = None,
+    threshold_label: str = "sigma",
+    spam_note: str | None = None,
     stream: TextIO = sys.stdout,
 ) -> None:
-    """Print a fixed-section analysis report to ``stream``."""
+    """Print a fixed-section analysis report to ``stream``.
+
+    ``candidate_threshold`` / ``strong_threshold`` are the actual density
+    thresholds used by the detector (from ``resolve_thresholds``); when
+    omitted the report falls back to the μ+2σ / μ+3σ notation.
+    """
     out = stream
     duration_minutes = duration_seconds / 60.0
 
@@ -79,10 +88,19 @@ def console_print(
 
     cand_count = sum(1 for h in highlights if h.level == "candidate")
     strong_count = sum(1 for h in highlights if h.level == "strong")
-    out.write(
-        f"候选区间 (D > μ+2σ): {cand_count} 个；"
-        f"强候选 (D > μ+3σ): {strong_count} 个\n"
-    )
+    if candidate_threshold is not None and strong_threshold is not None:
+        out.write(
+            f"候选区间 (D > {candidate_threshold:.2f}, 基线={threshold_label}): "
+            f"{cand_count} 个；强候选 (D > {strong_threshold:.2f}): "
+            f"{strong_count} 个\n"
+        )
+    else:
+        out.write(
+            f"候选区间 (D > μ+2σ): {cand_count} 个；"
+            f"强候选 (D > μ+3σ): {strong_count} 个\n"
+        )
+    if spam_note:
+        out.write(spam_note + "\n")
     if highlights:
         out.write(_format_highlight_table(highlights))
 
@@ -208,11 +226,13 @@ def console_print(
 
 
 def _format_highlight_table(highlights: list[HighlightCandidate]) -> str:
-    lines = ["# | t_start | t_end | duration(s) | peak_D | level"]
+    from video_highlight.highlights import SHAPE_LABELS
+
+    lines = ["# | t_start | t_end | duration(s) | peak_D | level | shape"]
     for i, h in enumerate(highlights, 1):
         lines.append(
             f"{i} | {h.t_start:.1f} | {h.t_end:.1f} | {h.duration:.1f} "
-            f"| {h.peak_density:.0f} | {h.level}"
+            f"| {h.peak_density:.0f} | {h.level} | {SHAPE_LABELS.get(h.shape, h.shape)}"
         )
     return "\n".join(lines) + "\n"
 
@@ -243,11 +263,14 @@ def plot(
     concentration: ConcentrationResult,
     overlap: OverlapResult,
     output_path: str | Path,
+    candidate_threshold: float | None = None,
+    strong_threshold: float | None = None,
 ) -> bool:
     """Render a 3x3 chart to ``output_path``. Return False if matplotlib unavailable.
 
     Metrics 7/8 are per-window console summaries and are intentionally not
-    charted, so they are not parameters here.
+    charted, so they are not parameters here. When threshold floats are
+    provided they are drawn instead of the μ+2σ / μ+3σ lines.
     """
     try:
         import matplotlib
@@ -263,7 +286,10 @@ def plot(
 
     ax = axes[0, 0]
     ax.plot(density.D.index, density.D.values, label="D(t)", color="tab:blue")
-    if density.sigma > 0:
+    if candidate_threshold is not None and strong_threshold is not None:
+        ax.axhline(candidate_threshold, color="tab:orange", linestyle="--", label=f"cand {candidate_threshold:.1f}")
+        ax.axhline(strong_threshold, color="tab:red", linestyle="--", label=f"strong {strong_threshold:.1f}")
+    elif density.sigma > 0:
         ax.axhline(density.mu + 2 * density.sigma, color="tab:orange", linestyle="--", label="μ+2σ")
         ax.axhline(density.mu + 3 * density.sigma, color="tab:red", linestyle="--", label="μ+3σ")
     ax.set_title("弹幕密度 D(t)")

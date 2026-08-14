@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from video_highlight.highlights import find_candidates
+from video_highlight.highlights import DetectionParams, find_candidates, resolve_thresholds
 from video_highlight.loader import to_dataframe
 from video_highlight.metrics.activation import compute as compute_activation
 from video_highlight.metrics.burst import compute as compute_burst
@@ -15,6 +15,8 @@ from video_highlight.metrics.density import compute as compute_density
 from video_highlight.metrics.length_dist import compute as compute_length_dist
 from video_highlight.metrics.lifecycle import compute as compute_lifecycle
 from video_highlight.metrics.overlap import compute as compute_overlap
+from video_highlight.metrics.repeat import compute as compute_repeat
+from video_highlight.metrics.repeat import spam_exclude_mask
 from video_highlight.metrics.returning import compute as compute_returning
 from video_highlight.parser import parse_xml
 from video_highlight.report import console_print, plot
@@ -41,6 +43,44 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=None,
         help="If provided, save a 3x3 summary chart to this PNG path. "
         "Requires matplotlib (pip install 'video-highlight[plot]').",
+    )
+    parser.add_argument(
+        "--threshold-mode",
+        choices=["sigma", "robust", "percentile"],
+        default="sigma",
+        help="Baseline for the density thresholds: sigma (μ+kσ), robust "
+        "(median+k·MAD, resists outlier inflation), or percentile "
+        "(quantiles of the density curve).",
+    )
+    parser.add_argument(
+        "--candidate-sigma",
+        type=float,
+        default=DetectionParams().candidate_sigma,
+        help="Candidate threshold multiplier (μ/median + k·σ/MAD).",
+    )
+    parser.add_argument(
+        "--strong-sigma",
+        type=float,
+        default=DetectionParams().strong_sigma,
+        help="Strong-candidate threshold multiplier.",
+    )
+    parser.add_argument(
+        "--min-duration",
+        type=float,
+        default=DetectionParams().min_duration_seconds,
+        help="Drop candidate runs shorter than this many seconds "
+        "(filters single-second noise spikes).",
+    )
+    parser.add_argument(
+        "--merge-gap",
+        type=float,
+        default=DetectionParams().merge_gap_seconds,
+        help="Merge runs separated by less than this many seconds.",
+    )
+    parser.add_argument(
+        "--no-spam-filter",
+        action="store_true",
+        help="Disable the repeated-text (刷屏) false-peak filter.",
     )
     return parser.parse_args(argv)
 
@@ -70,17 +110,60 @@ def main(argv: list[str] | None = None) -> int:
         print(f"video-highlight: file not found: {args.xml_path}")
         return 1
 
+    params = DetectionParams(
+        threshold_mode=args.threshold_mode,
+        candidate_sigma=args.candidate_sigma,
+        strong_sigma=args.strong_sigma,
+        min_duration_seconds=args.min_duration,
+        merge_gap_seconds=args.merge_gap,
+    )
+
     records = parse_xml(args.xml_path)
     df = to_dataframe(records)
     density = compute_density(df)
     burst = compute_burst(density)
-    highlights = find_candidates(density)
-    activation = compute_activation(df)
-    length_dist = compute_length_dist(df)
+    repeat = compute_repeat(df)
     concentration = compute_concentration(df)
     overlap = compute_overlap(df)
+
+    exclude = None
+    if not args.no_spam_filter:
+        exclude = spam_exclude_mask(
+            repeat,
+            concentration,
+            max_ratio=params.spam_max_ratio,
+            conc_threshold=params.spam_concentration,
+        )
+
+    highlights = find_candidates(
+        density,
+        exclude=exclude,
+        merge_overlap=overlap.overlap,
+        **params.find_kwargs(),
+    )
+
+    activation = compute_activation(df)
+    length_dist = compute_length_dist(df)
     lifecycle = compute_lifecycle(df, highlights)
     returning = compute_returning(df, highlights)
+
+    thr_c, thr_s = resolve_thresholds(
+        density,
+        threshold_mode=params.threshold_mode,
+        candidate_sigma=params.candidate_sigma,
+        strong_sigma=params.strong_sigma,
+        candidate_percentile=params.candidate_percentile,
+        strong_percentile=params.strong_percentile,
+    )
+
+    spam_note = None
+    if exclude is not None:
+        n_excluded = int(exclude.sum())
+        spam_note = (
+            f"[刷屏过滤] 排除 {n_excluded} 个秒级窗口 "
+            f"(重复占比≥{params.spam_max_ratio:.0%} 且 Top-3 集中度"
+            f"≥{params.spam_concentration:.0%})"
+        )
 
     console_print(
         density=density,
@@ -94,6 +177,10 @@ def main(argv: list[str] | None = None) -> int:
         returning=returning,
         danmaku_count=len(records),
         duration_seconds=density.duration_seconds,
+        candidate_threshold=thr_c,
+        strong_threshold=thr_s,
+        threshold_label=params.threshold_mode,
+        spam_note=spam_note,
     )
 
     if args.plot is not None:
@@ -106,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
             concentration=concentration,
             overlap=overlap,
             output_path=args.plot,
+            candidate_threshold=thr_c,
+            strong_threshold=thr_s,
         )
         if ok:
             print(f"\n=== 图表：已保存到 {args.plot} ===", file=sys.stderr)
