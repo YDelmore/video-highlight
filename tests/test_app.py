@@ -271,3 +271,46 @@ def test_session_mode_time_interval_filters_records(tmp_path, chunk_xml) -> None
     assert values["弹幕总数"] == "2"
     captions = [c.value for c in at.caption]
     assert any("00:01:00" in c for c in captions)
+
+
+def test_chunk_mode_analyzes_single_chunk(tmp_path, chunk_xml) -> None:
+    import pathlib
+
+    streamer_dir = pathlib.Path(tmp_path) / "HuYa" / "主播"
+    streamer_dir.mkdir(parents=True, exist_ok=True)
+    live = 1_786_000_000_000
+    (streamer_dir / "chunk1.xml").write_text(
+        chunk_xml(
+            live,
+            user="主播",
+            nodes=[("u1", live + 1000, "a"), ("u2", live + 2000, "b")],
+        ),
+        encoding="utf-8",
+    )
+    (streamer_dir / "chunk2.xml").write_text(
+        chunk_xml(
+            live,
+            user="主播",
+            nodes=[("u3", live + 3000, "c")],
+        ),
+        encoding="utf-8",
+    )
+
+    at = AppTest.from_file(str(APP_PATH))
+    at.session_state["source_mode"] = "按片段分析"
+    at.session_state["chunk_root"] = str(tmp_path)
+    at.run()
+
+    assert not at.exception
+    # 默认选中该场第一个分片 chunk1.xml -> 2 条弹幕
+    values = {m.label: m.value for m in at.metric}
+    assert values["弹幕总数"] == "2"
+    captions = [c.value for c in at.caption]
+    assert any("按片段" in c and "chunk1.xml" in c for c in captions)
+
+    # 切到第二个分片 chunk2.xml -> 1 条弹幕
+    next(s for s in at.selectbox if s.key == "sel_chunk").set_value(1)
+    at.run()
+    assert not at.exception
+    values = {m.label: m.value for m in at.metric}
+    assert values["弹幕总数"] == "1"

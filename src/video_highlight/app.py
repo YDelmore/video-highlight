@@ -86,7 +86,8 @@ DEFAULT_XML = PROJECT_ROOT / "docs/2026-08-07-22-24-43-052-解说一下今天比
 
 FILE_MODE = "单个弹幕文件"
 SESSION_MODE = "整场直播（分片聚合）"
-SOURCE_MODES = (FILE_MODE, SESSION_MODE)
+CHUNK_MODE = "按片段分析"
+SOURCE_MODES = (FILE_MODE, SESSION_MODE, CHUNK_MODE)
 DEFAULT_SESSION_ROOT = "E:/huya"
 
 
@@ -99,7 +100,8 @@ class SourceConfig:
     xml_path: str
     root: str
     session: DanmakuSession | None
-    interval: tuple[int, int]
+    interval: tuple[int, int] = (0, 0)
+    chunk_path: str | None = None  # 按片段模式选中的分片绝对路径
 
 
 @st.cache_data
@@ -454,6 +456,27 @@ def _session_controls(root: str) -> tuple[DanmakuSession | None, tuple[int, int]
     return session, interval
 
 
+def _chunk_controls(root: str) -> tuple[DanmakuSession | None, str | None]:
+    """平台 → 主播 → 场次 → 分片 四级联动。
+
+    Returns ``(session, chunk_path)`` where ``chunk_path`` is the absolute
+    path of the selected chunk; ``(None, None)`` when the root has no chunks.
+    The chunk is analysed alone (t=0 = its first danmaku), not aggregated.
+    """
+    session = _session_cascade(root)
+    if session is None:
+        return None, None
+    chunks = session.chunks  # tuple[Path, ...]，按创建时间升序
+    picked = st.sidebar.selectbox(
+        "分片",
+        list(range(len(chunks))),
+        format_func=lambda i: chunks[i].name,
+        key="sel_chunk",
+        help="选中后单独跑完整分析（t=0 = 该分片首条弹幕），不做场次级聚合。",
+    )
+    return session, str(chunks[picked])
+
+
 # --------------------------------------------------------------------------
 # Sidebar controls
 # --------------------------------------------------------------------------
@@ -467,13 +490,15 @@ def _sidebar_controls() -> tuple[
         SOURCE_MODES,
         index=0,
         key="source_mode",
-        help="整场直播模式：扫描分片根目录，把同一场直播的分片在后台聚合后再分析。",
+        help="整场直播模式：扫描分片根目录，把同一场直播的分片在后台聚合后再分析；"
+        "按片段模式：选中一个分片单独分析。",
     )
     uploaded = None
     xml_input = str(DEFAULT_XML)
     root = DEFAULT_SESSION_ROOT
     session: DanmakuSession | None = None
     interval = (0, 0)
+    chunk_path: str | None = None
     if mode == SESSION_MODE:
         root = st.sidebar.text_input(
             "分片根目录",
@@ -482,6 +507,14 @@ def _sidebar_controls() -> tuple[
             help="目录结构：平台 → 主播 → 分片 xml；按 metadata 的 live_start_time 聚合同一场直播。",
         )
         session, interval = _session_controls(root)
+    elif mode == CHUNK_MODE:
+        root = st.sidebar.text_input(
+            "分片根目录",
+            value=DEFAULT_SESSION_ROOT,
+            key="chunk_root",
+            help="目录结构：平台 → 主播 → 分片 xml。选中的分片单独分析。",
+        )
+        session, chunk_path = _chunk_controls(root)
     else:
         uploaded = st.sidebar.file_uploader(
             "上传弹幕 XML 文件",
@@ -597,7 +630,7 @@ def _sidebar_controls() -> tuple[
         c=st.sidebar.number_input("C 阈值", 0.0, 1.0, 0.30, 0.05, key="th_c"),
     )
     return (
-        SourceConfig(mode, uploaded, xml_input, root, session, interval),
+        SourceConfig(mode, uploaded, xml_input, root, session, interval, chunk_path),
         window_seconds,
         weights,
         thresholds,
@@ -645,6 +678,15 @@ if cfg.mode == SESSION_MODE:
         )
     source_label = f"整场直播：{session.label}（{len(session.chunks)} 分片聚合）{interval_note}"
     _sessions, unclassified = _discover_sessions_cached(cfg.root)
+elif cfg.mode == CHUNK_MODE:
+    if cfg.chunk_path is None or not Path(cfg.chunk_path).is_file():
+        st.error(f"在 {cfg.root} 下未发现任何弹幕分片 XML。")
+        st.stop()
+    analysis = load_analysis(cfg.chunk_path, window_seconds, detection)
+    source_label = (
+        f"按片段：{cfg.session.platform}/{cfg.session.user_name}/"
+        f"{Path(cfg.chunk_path).name}"
+    )
 else:
     if cfg.uploaded is not None:
         try:
