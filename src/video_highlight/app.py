@@ -370,6 +370,11 @@ def _reset_session_select() -> None:
     st.session_state.pop("sel_chunk", None)
 
 
+def _reset_chunk_select() -> None:
+    """Changing the session re-defaults the chunk picker."""
+    st.session_state.pop("sel_chunk", None)
+
+
 def _session_cascade(root: str) -> DanmakuSession | None:
     """平台 → 主播 → 场次 三级联动，返回选中场次（无分片时 None）。"""
     sessions, _ = _discover_sessions_cached(root)
@@ -393,6 +398,7 @@ def _session_cascade(root: str) -> DanmakuSession | None:
             list(range(len(chosen))),
             format_func=lambda i: labels[i],
             key="sel_session",
+            on_change=_reset_chunk_select,
             help="同一场直播的所有分片会在后台聚合为连续时间轴。"
             "分场按文件创建时间排序，相邻分片的上一文件修改时间与下一文件创建时间"
             "间隔 ≤1 小时且标题相同才视为同一场。",
@@ -679,10 +685,18 @@ if cfg.mode == SESSION_MODE:
     source_label = f"整场直播：{session.label}（{len(session.chunks)} 分片聚合）{interval_note}"
     _sessions, unclassified = _discover_sessions_cached(cfg.root)
 elif cfg.mode == CHUNK_MODE:
-    if cfg.chunk_path is None or not Path(cfg.chunk_path).is_file():
+    if (
+        cfg.chunk_path is None
+        or cfg.session is None
+        or not Path(cfg.chunk_path).is_file()
+    ):
         st.error(f"在 {cfg.root} 下未发现任何弹幕分片 XML。")
         st.stop()
-    analysis = load_analysis(cfg.chunk_path, window_seconds, detection)
+    try:
+        analysis = load_analysis(cfg.chunk_path, window_seconds, detection)
+    except DanmakuParseError as e:
+        st.error(f"无法解析该分片：{e}")
+        st.stop()
     source_label = (
         f"按片段：{cfg.session.platform}/{cfg.session.user_name}/"
         f"{Path(cfg.chunk_path).name}"

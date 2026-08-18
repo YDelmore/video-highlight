@@ -314,3 +314,13 @@ def test_chunk_mode_analyzes_single_chunk(tmp_path, chunk_xml) -> None:
     assert not at.exception
     values = {m.label: m.value for m in at.metric}
     assert values["弹幕总数"] == "1"
+
+
+def test_chunk_mode_empty_root_shows_error(tmp_path) -> None:
+    at = AppTest.from_file(str(APP_PATH))
+    at.session_state["source_mode"] = "按片段分析"
+    at.session_state["chunk_root"] = str(tmp_path)  # no xml under it
+    at.run()
+
+    assert not at.exception
+    assert at.error  # 未发现任何弹幕分片 XML → st.error + st.stop
