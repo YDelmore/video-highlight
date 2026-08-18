@@ -356,28 +356,23 @@ def _grade_legend() -> None:
 # --------------------------------------------------------------------------
 
 def _reset_streamer_selects() -> None:
-    """Changing the platform re-defaults the streamer and session pickers."""
+    """Changing the platform re-defaults the streamer, session and chunk pickers."""
     st.session_state.pop("sel_streamer", None)
     st.session_state.pop("sel_session", None)
+    st.session_state.pop("sel_chunk", None)
 
 
 def _reset_session_select() -> None:
-    """Changing the streamer re-defaults the session picker."""
+    """Changing the streamer re-defaults the session and chunk pickers."""
     st.session_state.pop("sel_session", None)
+    st.session_state.pop("sel_chunk", None)
 
 
-def _session_controls(root: str) -> tuple[DanmakuSession | None, tuple[int, int]]:
-    """Cascade platform → streamer → session, plus an analysis time-interval.
-
-    Returns ``(session, interval)`` where ``interval`` is the applied in-stream
-    ``(start_s, end_s)`` — the whole stream by default, or a user-chosen
-    sub-range. The range preview (record count) updates live while dragging;
-    the full metric pipeline only re-runs when 「应用区间分析」 is clicked.
-    """
+def _session_cascade(root: str) -> DanmakuSession | None:
+    """平台 → 主播 → 场次 三级联动，返回选中场次（无分片时 None）。"""
     sessions, _ = _discover_sessions_cached(root)
     if not sessions:
-        return None, (0, 0)
-
+        return None
     platforms = sorted({s.platform for s in sessions})
     platform = st.sidebar.selectbox(
         "平台", platforms, key="sel_platform", on_change=_reset_streamer_selects
@@ -390,7 +385,7 @@ def _session_controls(root: str) -> tuple[DanmakuSession | None, tuple[int, int]
         s for s in sessions if s.platform == platform and s.user_name == streamer
     ]
     labels = [f"{s.label}（{len(s.chunks)}分片）" for s in chosen]
-    session = chosen[
+    return chosen[
         st.sidebar.selectbox(
             "直播场次",
             list(range(len(chosen))),
@@ -402,9 +397,22 @@ def _session_controls(root: str) -> tuple[DanmakuSession | None, tuple[int, int]
         )
     ]
 
+
+def _session_controls(root: str) -> tuple[DanmakuSession | None, tuple[int, int]]:
+    """Cascade platform → streamer → session, plus an analysis time-interval.
+
+    Returns ``(session, interval)`` where ``interval`` is the applied in-stream
+    ``(start_s, end_s)`` — the whole stream by default, or a user-chosen
+    sub-range. The range preview (record count) updates live while dragging;
+    the full metric pipeline only re-runs when 「应用区间分析」 is clicked.
+    """
+    session = _session_cascade(root)
+    if session is None:
+        return None, (0, 0)
     records, _notes = load_session_records(session)
     if not records:
         return session, (0, 0)
+    # 以下 origin / duration / range_value / select_slider / apply_range 逻辑原样保留
     origin = records[0].ts_ms
     duration = max(int((records[-1].ts_ms - origin) / 1000), 1)
 
